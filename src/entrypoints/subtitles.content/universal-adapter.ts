@@ -1,5 +1,6 @@
 import type { ControlsConfig, PlatformConfig } from "@/entrypoints/subtitles.content/platforms"
 import type { FeatureUsageContext } from "@/types/analytics"
+import type { SubtitlesSource } from "@/utils/constants/subtitles"
 import type { SubtitlesFetcher } from "@/utils/subtitles/fetchers/types"
 import type { SubtitlesVideoContext } from "@/utils/subtitles/processor/translator"
 import type { SubtitlesFragment } from "@/utils/subtitles/types"
@@ -11,6 +12,7 @@ import { getLocalConfig } from "@/utils/config/storage"
 import {
   HIDE_NATIVE_CAPTIONS_STYLE_ID,
   NAVIGATION_HANDLER_DELAY,
+  SUBTITLES_SOURCE,
   TRANSLATE_BUTTON_CONTAINER_ID,
 } from "@/utils/constants/subtitles"
 import { getDocumentDescription } from "@/utils/content/metadata"
@@ -28,6 +30,7 @@ import {
   subtitlesPositionAtom,
   subtitlesSettingsPanelOpenAtom,
   subtitlesSettingsPanelViewAtom,
+  subtitlesSourceAtom,
   subtitlesStore,
 } from "./atoms"
 import { renderSubtitlesTranslateButton } from "./renderer/render-translate-button"
@@ -39,10 +42,34 @@ import { ROOT_VIEW } from "./ui/subtitles-settings-panel/views"
 
 type SubtitlesToggleSource = "manual" | "auto"
 
-export class UniversalVideoAdapter {
+type SubtitlesFetcherFactories = {
+  native: () => SubtitlesFetcher
+  ai?: () => SubtitlesFetcher
+}
+
+const LOADING_MESSAGE: Record<SubtitlesSource, string | undefined> = {
+  [SUBTITLES_SOURCE.NATIVE]: undefined,
+  [SUBTITLES_SOURCE.AI]: i18n.t("subtitles.loadingAiSubtitles"),
+}
+
+export interface SubtitlesProvidersAdapter {
+  readonly embedded: boolean | undefined
+  readonly containerShrinkRatio: ((container: HTMLElement) => number | null) | undefined
+  readonly supportsAiSubtitles: boolean
+  getControlsConfig: () => ControlsConfig | undefined
+  toggleSubtitlesManually: (enabled: boolean) => void
+  requestAiSubtitles: () => Promise<void>
+  downloadSourceSubtitles: () => Promise<void>
+  downloadTranslatedSubtitles: () => Promise<void>
+}
+
+export class UniversalVideoAdapter implements SubtitlesProvidersAdapter {
   private config: PlatformConfig
   private subtitlesScheduler: SubtitlesScheduler | null = null
-  private subtitlesFetcher: SubtitlesFetcher
+  private fetchers: SubtitlesFetcherFactories
+  private source: SubtitlesSource = SUBTITLES_SOURCE.NATIVE
+  private fetcher: SubtitlesFetcher
+  private switching = false
   private navigationReinitTimeoutId: ReturnType<typeof setTimeout> | null = null
   private hasPendingNavigationReset = false
   private trackChangeRefreshPromise: Promise<void> | null = null
@@ -74,15 +101,20 @@ export class UniversalVideoAdapter {
     return !!(this.sessionVideoId && currentVideoId && currentVideoId !== this.sessionVideoId)
   }
 
+  get supportsAiSubtitles(): boolean {
+    return !!this.fetchers.ai
+  }
+
   constructor({
     config,
-    subtitlesFetcher,
+    fetchers,
   }: {
     config: PlatformConfig
-    subtitlesFetcher: SubtitlesFetcher
+    fetchers: SubtitlesFetcherFactories
   }) {
     this.config = config
-    this.subtitlesFetcher = subtitlesFetcher
+    this.fetchers = fetchers
+    this.fetcher = fetchers.native()
   }
 
   async initialize() {
@@ -130,7 +162,7 @@ export class UniversalVideoAdapter {
 
   private initializeTranslatedSubtitlesDownloader() {
     this.translatedSubtitlesDownloader ??= new TranslatedSubtitlesDownloader(
-      this.subtitlesFetcher,
+      this.fetcher,
       this.config,
     )
   }
@@ -148,7 +180,12 @@ export class UniversalVideoAdapter {
     this.destroyScheduler()
     this.clearRuntimeSession()
     this.clearSourceCache()
-    this.subtitlesFetcher.cleanup()
+    this.fetcher.cleanup()
+    if (this.source !== SUBTITLES_SOURCE.NATIVE) {
+      this.source = SUBTITLES_SOURCE.NATIVE
+      this.fetcher = this.fetchers.native()
+    }
+    subtitlesStore.set(subtitlesSourceAtom, SUBTITLES_SOURCE.NATIVE)
     subtitlesStore.set(subtitlesSettingsPanelOpenAtom, false)
     subtitlesStore.set(subtitlesSettingsPanelViewAtom, ROOT_VIEW)
     this.showNativeSubtitles()
@@ -179,17 +216,17 @@ export class UniversalVideoAdapter {
 
   private async getOrLoadSourceSubtitles(): Promise<SubtitlesFragment[]> {
     const currentVideoId = this.config.getVideoId?.() ?? null
-    const useSameTrack = await this.subtitlesFetcher.shouldUseSameTrack()
+    const useSameTrack = await this.fetcher.shouldUseSameTrack()
 
     if (useSameTrack && this.sourceVideoId === currentVideoId && this.sourceSubtitles.length > 0) {
       return this.sourceSubtitles
     }
 
-    if (!(await this.subtitlesFetcher.hasAvailableSubtitles())) {
+    if (!(await this.fetcher.hasAvailableSubtitles())) {
       throw new OverlaySubtitlesError(i18n.t("subtitles.errors.noSubtitlesFound"))
     }
 
-    const subtitles = await this.subtitlesFetcher.fetch()
+    const subtitles = await this.fetcher.fetch()
     if (subtitles.length === 0) {
       throw new OverlaySubtitlesError(i18n.t("subtitles.errors.noSubtitlesFound"))
     }
@@ -202,8 +239,8 @@ export class UniversalVideoAdapter {
   }
 
   private buildSourceProcessedSubtitles(rawSubtitles: SubtitlesFragment[]): SubtitlesFragment[] {
-    if (this.subtitlesFetcher.isPreSegmented?.()) return rawSubtitles
-    const sourceLanguage = this.subtitlesFetcher.getSourceLanguage()
+    if (this.fetcher.isPreSegmented?.()) return rawSubtitles
+    const sourceLanguage = this.fetcher.getSourceLanguage()
     return optimizeSubtitles(rawSubtitles, sourceLanguage)
   }
 
@@ -369,15 +406,68 @@ export class UniversalVideoAdapter {
 
   private handleToggleSubtitles(enabled: boolean, analyticsContext?: FeatureUsageContext) {
     if (enabled) {
-      this.subtitlesScheduler?.start()
-      this.subtitlesScheduler?.show()
-      this.hideNativeSubtitles()
-      void this.startTranslation(analyticsContext)
+      void this.switchSubtitlesFetcher(SUBTITLES_SOURCE.NATIVE, analyticsContext)
     } else {
       this.subtitlesScheduler?.hide()
       this.showNativeSubtitles()
       this.translationCoordinator?.stop()
     }
+  }
+
+  requestAiSubtitles = (): Promise<void> => {
+    return this.switchSubtitlesFetcher(SUBTITLES_SOURCE.AI)
+  }
+
+  private async switchSubtitlesFetcher(
+    next: SubtitlesSource,
+    analyticsContext?: FeatureUsageContext,
+  ): Promise<void> {
+    if (this.switching) {
+      return
+    }
+
+    const make = this.fetchers[next]
+    if (!make) {
+      return
+    }
+
+    this.switching = true
+    try {
+      if (next !== this.source) {
+        this.fetcher.cleanup()
+        this.source = next
+        subtitlesStore.set(subtitlesSourceAtom, next)
+        this.fetcher = make()
+        this.clearSourceCache()
+        this.clearRuntimeSession()
+      }
+
+      this.subtitlesScheduler?.start()
+      this.subtitlesScheduler?.show()
+      this.hideNativeSubtitles()
+
+      const message = LOADING_MESSAGE[next]
+      if (message) {
+        this.subtitlesScheduler?.setState("loading", { message })
+      }
+
+      const succeeded = await this.startTranslation(analyticsContext)
+      if (!succeeded && next !== SUBTITLES_SOURCE.NATIVE) {
+        this.revertToNativeSource()
+      }
+    } finally {
+      this.switching = false
+    }
+  }
+
+  private revertToNativeSource() {
+    this.fetcher.cleanup()
+    this.source = SUBTITLES_SOURCE.NATIVE
+    this.fetcher = this.fetchers.native()
+    subtitlesStore.set(subtitlesSourceAtom, SUBTITLES_SOURCE.NATIVE)
+    this.clearSourceCache()
+    this.clearRuntimeSession()
+    this.showNativeSubtitles()
   }
 
   private async refreshSourceTrackIfNeeded(): Promise<void> {
@@ -386,14 +476,14 @@ export class UniversalVideoAdapter {
       return
     }
 
-    const useSameTrack = await this.subtitlesFetcher.shouldUseSameTrack()
+    const useSameTrack = await this.fetcher.shouldUseSameTrack()
     if (useSameTrack) {
       return
     }
 
     this.clearRuntimeSession()
     this.clearSourceCache()
-    this.subtitlesFetcher.cleanup()
+    this.fetcher.cleanup()
     scheduler.reset()
     scheduler.setState("loading")
 
@@ -434,14 +524,14 @@ export class UniversalVideoAdapter {
     this.isNativeSubtitlesHidden = true
   }
 
-  private async startTranslation(analyticsContext?: FeatureUsageContext) {
+  private async startTranslation(analyticsContext?: FeatureUsageContext): Promise<boolean> {
     try {
       const currentVideoId = this.config.getVideoId?.() ?? ""
       const hasCurrentSession =
         this.sessionProcessedFragments.length > 0 && this.sessionVideoId === currentVideoId
       this.sessionVideoId = currentVideoId
 
-      const useSameTrack = await this.subtitlesFetcher.shouldUseSameTrack()
+      const useSameTrack = await this.fetcher.shouldUseSameTrack()
 
       if (useSameTrack && hasCurrentSession) {
         // Translated sessions create a coordinator; passthrough sessions only cache rendered fragments.
@@ -460,14 +550,14 @@ export class UniversalVideoAdapter {
             outcome: "success",
           })
         }
-        return
+        return true
       }
 
       this.clearRuntimeSession()
       this.sessionVideoId = currentVideoId
       this.subtitlesScheduler?.reset()
 
-      this.subtitlesScheduler?.setState("loading")
+      this.subtitlesScheduler?.setState("loading", { message: LOADING_MESSAGE[this.source] })
 
       await this.getOrLoadSourceSubtitles()
       this.sessionSubtitles = this.sourceSubtitles
@@ -483,6 +573,7 @@ export class UniversalVideoAdapter {
           outcome: "success",
         })
       }
+      return true
     } catch (error) {
       if (analyticsContext) {
         void trackFeatureUsed({
@@ -490,6 +581,7 @@ export class UniversalVideoAdapter {
           outcome: "failure",
         })
       }
+
       const errorMessage = error instanceof Error ? error.message : String(error)
 
       if (error instanceof ToastSubtitlesError) {
@@ -499,13 +591,14 @@ export class UniversalVideoAdapter {
           message: this.config.silentErrors ? "" : errorMessage,
         })
       }
+      return false
     }
   }
 
   private async shouldSkipTranslationForCurrentTrack(): Promise<boolean> {
     const config = await getLocalConfig()
     const targetLanguage = config?.language.targetCode
-    const sourceLanguage = resolveLanguageCodeFromLocale(this.subtitlesFetcher.getSourceLanguage())
+    const sourceLanguage = resolveLanguageCodeFromLocale(this.fetcher.getSourceLanguage())
 
     if (!targetLanguage || !sourceLanguage) {
       return false
@@ -546,8 +639,8 @@ export class UniversalVideoAdapter {
         baselineFragments: this.sourceProcessedSubtitles,
         rawFragments: this.sessionSubtitles,
         getVideoElement: () => this.subtitlesScheduler?.getVideoElement() ?? null,
-        getSourceLanguage: () => this.subtitlesFetcher.getSourceLanguage(),
-        preSegmented: this.subtitlesFetcher.isPreSegmented?.(),
+        getSourceLanguage: () => this.fetcher.getSourceLanguage(),
+        preSegmented: this.fetcher.isPreSegmented?.(),
       })
     } else {
       this.sessionProcessedFragments = [...this.sourceProcessedSubtitles]
