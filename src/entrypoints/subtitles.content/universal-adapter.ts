@@ -162,7 +162,7 @@ export class UniversalVideoAdapter implements SubtitlesProvidersAdapter {
 
   private initializeTranslatedSubtitlesDownloader() {
     this.translatedSubtitlesDownloader ??= new TranslatedSubtitlesDownloader(
-      this.fetcher,
+      () => this.fetcher,
       this.config,
     )
   }
