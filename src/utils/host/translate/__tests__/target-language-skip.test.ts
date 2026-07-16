@@ -111,4 +111,17 @@ describe.each(["bilingual", "translationOnly"] as const)("%s translation", (mode
 
     expect(mocks.translateTextForPage).toHaveBeenCalledOnce()
   })
+
+  it("lets explicit node translation override target-language skip", async () => {
+    mocks.detectLanguage.mockResolvedValue("cmn")
+    const container = document.createElement("div")
+    const textNode = document.createTextNode(LONG_CHINESE)
+    container.appendChild(textNode)
+    document.body.appendChild(container)
+
+    await translateNodes([textNode], "walk-id", true, createConfig({ mode }))
+
+    expect(mocks.detectLanguage).not.toHaveBeenCalled()
+    expect(mocks.translateTextForPage).toHaveBeenCalledOnce()
+  })
 })
