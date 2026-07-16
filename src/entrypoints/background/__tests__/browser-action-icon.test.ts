@@ -18,12 +18,6 @@ const DEFAULT_ACTION_ICON_PATHS = {
   48: "/icon/48.png",
 }
 
-const ACTIVE_ACTION_ICON_PATHS = {
-  16: "/icon/16-active.png",
-  32: "/icon/32-active.png",
-  48: "/icon/48-active.png",
-}
-
 function getStorageChangeListener() {
   const listener = storageOnChangedAddListenerMock.mock.calls.at(-1)?.[0]
   if (!listener) throw new Error("Expected storage.session.onChanged listener")
@@ -90,7 +84,7 @@ describe("browser action icon", () => {
     })
   })
 
-  it("shows the active icon when the current page has been processed", async () => {
+  it("shows a native completed badge matching the processing badge size", async () => {
     await setupSubject()
 
     await getStorageChangeListener()({
@@ -105,9 +99,13 @@ describe("browser action icon", () => {
 
     expect(setIconMock).toHaveBeenCalledWith({
       tabId: 42,
-      path: ACTIVE_ACTION_ICON_PATHS,
+      path: DEFAULT_ACTION_ICON_PATHS,
     })
-    expect(setBadgeTextMock).toHaveBeenCalledWith({ tabId: 42, text: "" })
+    expect(setBadgeTextMock).toHaveBeenCalledWith({ tabId: 42, text: "✓" })
+    expect(setBadgeBackgroundColorMock).toHaveBeenCalledWith({
+      tabId: 42,
+      color: "#0A3658",
+    })
   })
 
   it("returns to the default icon after a top-frame navigation", async () => {

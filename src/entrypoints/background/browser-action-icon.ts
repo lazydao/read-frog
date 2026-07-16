@@ -21,30 +21,25 @@ const DEFAULT_ACTION_ICON_PATHS: ActionIconPathMap = {
   48: "/icon/48.png",
 }
 
-const ACTIVE_ACTION_ICON_PATHS: ActionIconPathMap = {
-  16: "/icon/16-active.png",
-  32: "/icon/32-active.png",
-  48: "/icon/48-active.png",
-}
-
 async function updateActionIcon(tabId: number, state: TabProcessingState | null) {
   const processing = state?.status === "processing"
   const done = state?.status === "done"
+  const badgeText = processing ? "…" : done ? "✓" : ""
 
   await Promise.all([
     browser.action.setIcon({
       tabId,
-      path: done ? ACTIVE_ACTION_ICON_PATHS : DEFAULT_ACTION_ICON_PATHS,
+      path: DEFAULT_ACTION_ICON_PATHS,
     }),
     browser.action.setBadgeText({
       tabId,
-      text: processing ? "…" : "",
+      text: badgeText,
     }),
-    ...(processing
+    ...(processing || done
       ? [
           browser.action.setBadgeBackgroundColor({
             tabId,
-            color: "#F59E0B",
+            color: processing ? "#F59E0B" : "#0A3658",
           }),
         ]
       : []),
