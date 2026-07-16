@@ -25,13 +25,35 @@ iterations after the core page and subtitle workflows are stable.
 ## Development
 
 ```bash
-pnpm install
+corepack enable
+pnpm install --frozen-lockfile
 pnpm type-check
 SKIP_FREE_API=true pnpm test
 pnpm build
 ```
 
 On PowerShell, use `$env:SKIP_FREE_API="true"` before running tests.
+
+## Build and install locally
+
+Node.js 22.22 or newer is required. A clean checkout only needs two commands:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm package:chrome
+```
+
+The package command builds the Chrome Manifest V3 extension and writes both the
+unpacked extension and an installable zip under `.output/`.
+
+To use the unpacked build in Chrome or Edge:
+
+1. Open `chrome://extensions` or `edge://extensions`.
+2. Enable developer mode.
+3. Choose **Load unpacked** and select `.output/chrome-mv3`.
+
+Run `pnpm package:chrome` again after source changes, then reload the extension on
+the browser extensions page. No hosted Read Frog environment variables are required.
 
 ## Upstream policy
 

@@ -12,7 +12,9 @@ import {
 const WXT_API_KEY_PATTERN = /^WXT_.*API_KEY/
 const ALLOWED_BUNDLED_API_KEYS = new Set(["WXT_POSTHOG_API_KEY"])
 const useLocalPackages = isLocalPackagesEnabled(process.env)
-const shouldSkipEnvValidation = process.env.WXT_SKIP_ENV_VALIDATION === "true"
+// This fork has no hosted service environment. Keep local builds zero-config while
+// allowing release maintainers to opt back into strict validation when needed.
+const shouldSkipEnvValidation = process.env.WXT_VALIDATE_ENV !== "true"
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
