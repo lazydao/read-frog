@@ -97,7 +97,7 @@ function restoreTextSplit(record: TextSplitRecord): boolean {
     // complete new value while leaving splitText-created tails behind. With
     // the chain intact and every tail still holding its post-split value, the
     // tails are proven duplicates; keep the host value and remove only the
-    // fragments Read Frog created.
+    // fragments TransFrog created.
     createdTails.forEach((tail) => tail.remove())
     return true
   }

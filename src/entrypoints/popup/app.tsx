@@ -1,20 +1,15 @@
 import { Icon } from "@iconify/react"
-import { UserAccountMenuPopup } from "@/components/user-account-menu"
 import { i18n } from "@/utils/i18n"
 import { openOptionsPage } from "@/utils/navigation"
 import { version } from "../../../package.json"
 import { AISmartContext } from "./components/ai-smart-context"
 import { AlwaysTranslate } from "./components/always-translate"
-import BlogNotification from "./components/blog-notification"
-import { DiscordButton } from "./components/discord-button"
 import LanguageOptionsSelector from "./components/language-options-selector"
-import { MoreMenu } from "./components/more-menu"
 import Hotkey from "./components/node-translation-hotkey-selector"
 import ProvidersField from "./components/providers-field"
 import { SiteControlToggle } from "./components/site-control-toggle"
 import TranslateButton from "./components/translate-button"
 import TranslatePromptSelector from "./components/translate-prompt-selector"
-import { TranslationHubButton } from "./components/translation-hub-button"
 import TranslationModeSelector from "./components/translation-mode-selector"
 
 function App() {
@@ -22,12 +17,8 @@ function App() {
     <>
       <div className="flex flex-col gap-4 bg-background px-6 pt-5 pb-4">
         <div className="flex items-center justify-between">
-          <UserAccountMenuPopup />
-          <div className="flex items-center">
-            <TranslationHubButton />
-            <DiscordButton />
-            <BlogNotification />
-          </div>
+          <span className="text-sm font-semibold">TransFrog</span>
+          <span className="text-xs text-muted-foreground">Page + Video</span>
         </div>
         <LanguageOptionsSelector />
         <ProvidersField />
@@ -53,7 +44,7 @@ function App() {
           <span className="text-[13px] font-medium">{i18n.t("popup.options")}</span>
         </button>
         <span className="text-sm text-neutral-500 dark:text-neutral-400">{version}</span>
-        <MoreMenu />
+        <span className="w-8" aria-hidden="true" />
       </div>
     </>
   )

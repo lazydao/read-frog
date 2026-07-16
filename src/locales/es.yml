@@ -1,6 +1,6 @@
-name: Read Frog
-extName: Read Frog - Traduce y aprende
-extDescription: Read Frog es una extensión de navegador de código abierto diseñada para ayudarte a aprender idiomas en profundidad desde cualquier sitio web.
+name: TransFrog
+extName: TransFrog - Páginas y subtítulos
+extDescription: Traduce páginas web y subtítulos de YouTube con tus propios proveedores de IA o traducción.
 uninstallSurveyUrl: https://tally.so/r/nPK6Ob
 account:
   login: Iniciar sesión
@@ -16,7 +16,7 @@ contextMenu:
   readAloudSelection: Leer en voz alta "%s"
   showOriginal: Mostrar original
 sidePanel:
-  firefoxUserActionHint: En Firefox, abre Read Frog desde la barra lateral del navegador.
+  firefoxUserActionHint: En Firefox, abre TransFrog desde la barra lateral del navegador.
   firefoxUserActionHelpText: Aprende a abrir la barra lateral de Firefox
   firefoxUserActionHelpUrl: https://support.mozilla.org/en-US/kb/use-sidebar-access-tools-and-vertical-tabs
 popup:
@@ -51,7 +51,7 @@ popup:
   discord:
     tooltip: Únete a Discord para conectar con desarrolladores y obtener acceso anticipado a nuevas funciones
   blog:
-    notification: Novedades de Read Frog
+    notification: Novedades de TransFrog
   aiSmartContext: Contexto inteligente de IA
   aiSmartContextDescription: Usa el contexto de la página web para mejorar la calidad de la traducción. Requiere un proveedor de traducción LLM.
   more:
@@ -316,7 +316,7 @@ options:
     floatingButton:
       globalToggle:
         title: Activar botón flotante
-        description: Muestra el botón flotante en páginas web para acceder rápidamente a las funciones de Read Frog
+        description: Muestra el botón flotante en páginas web para acceder rápidamente a las funciones de TransFrog
       closeMenu:
         disableForSite: Desactivar para este sitio
         disableGlobally: Desactivar globalmente
@@ -821,7 +821,7 @@ options:
       fallback: Alternativa
       selectPlaceholder: Selecciona una voz
       noVoicesFound: No se encontraron voces
-      previewSample: ¡Hola desde Read Frog! Así sonaré al leer en voz alta.
+      previewSample: ¡Hola desde TransFrog! Así sonaré al leer en voz alta.
     languageVoice:
       label: Voz por idioma
       reset: Restablecer
@@ -847,11 +847,11 @@ options:
     title: Configuración
     about:
       title: Acerca de
-      description: Read Frog nació en abril de 2025
-      mission: Read Frog busca ampliar el acceso igualitario a educación de alta calidad en la era de la AI haciendo asequibles experiencias de aprendizaje que se sientan más cercanas a un profesor real, en el aprendizaje de idiomas, medicina y otros campos intensivos en conocimiento.
+      description: TransFrog nació en abril de 2025
+      mission: TransFrog busca ampliar el acceso igualitario a educación de alta calidad en la era de la AI haciendo asequibles experiencias de aprendizaje que se sientan más cercanas a un profesor real, en el aprendizaje de idiomas, medicina y otros campos intensivos en conocimiento.
       analytics:
         title: Ayuda a mejorar la experiencia de usuario
-        tooltip: Cuando está activado, Read Frog envía señales anónimas de uso del producto para que podamos verificar la fiabilidad de las funciones, mejorar el rendimiento y el acabado de la UX, y priorizar trabajos futuros.
+        tooltip: Cuando está activado, TransFrog envía señales anónimas de uso del producto para que podamos verificar la fiabilidad de las funciones, mejorar el rendimiento y el acabado de la UX, y priorizar trabajos futuros.
     sync:
       title: Sincronización manual de configuración
       description: Importa y exporta manualmente tus ajustes de configuración
@@ -860,7 +860,7 @@ options:
       importSuccess: Configuración importada correctamente
       exportSuccess: Configuración exportada correctamente
       importError: Error al importar
-      versionTooNew: La versión de configuración importada es más reciente; actualiza Read Frog a la última versión
+      versionTooNew: La versión de configuración importada es más reciente; actualiza TransFrog a la última versión
       migrationError: Error de migración
       validationError: Error de validación de configuración
       exportOptions:
@@ -1098,13 +1098,13 @@ action:
   saveToNotebaseConnectExisting: Conectar Notebase existente
   saveToNotebaseGoConfigure: Configurar
   saveToNotebaseLoginConnectedTitle: ¿Iniciar sesión para guardar?
-  saveToNotebaseLoginConnectedDescription: Esta Custom Action está conectada a la cuenta de abajo. Después de iniciar sesión, Read Frog guardará en la Notebase existente si es posible, o creará una nueva Notebase para la cuenta actual.
+  saveToNotebaseLoginConnectedDescription: Esta Custom Action está conectada a la cuenta de abajo. Después de iniciar sesión, TransFrog guardará en la Notebase existente si es posible, o creará una nueva Notebase para la cuenta actual.
   saveToNotebaseConnectionUnavailableTitle: Conexión de Notebase no disponible
   saveToNotebaseMissingNotebaseDescription: La Notebase anterior ya no existe o esta cuenta no puede abrirla. Crea una nueva Notebase y guarda este resultado, o conecta una Notebase existente en Custom AI Actions.
   saveToNotebaseAccountUnavailableDescription: La cuenta actual no coincide con la cuenta conectada de abajo. Crear y guardar reemplazará la conexión anterior y los mapeos de campos. También puedes conectar una Notebase existente en Custom AI Actions.
   saveToNotebasePendingLogin: Inicia sesión para terminar de guardar
-  saveToNotebasePendingLoginDescription: Después de iniciar sesión, Read Frog creará la Notebase y guardará este resultado automáticamente.
-  saveToNotebasePendingConnectedLoginDescription: Después de iniciar sesión, Read Frog guardará en la Notebase conectada si es posible. Si esta cuenta no puede usarla, creará una nueva Notebase y guardará este resultado.
+  saveToNotebasePendingLoginDescription: Después de iniciar sesión, TransFrog creará la Notebase y guardará este resultado automáticamente.
+  saveToNotebasePendingConnectedLoginDescription: Después de iniciar sesión, TransFrog guardará en la Notebase conectada si es posible. Si esta cuenta no puede usarla, creará una nueva Notebase y guardará este resultado.
   upgrade: Mejorar plan
   openCustomActions: Abrir Custom AI Actions
   openNotebase: Abrir Notebase
@@ -1134,7 +1134,7 @@ subtitles:
     downloadTranslatedComplete: Subtítulos traducidos descargados
     downloadSource: Descargar subtítulos de origen
   state:
-    loading: Read Frog está cargando subtítulos
+    loading: TransFrog está cargando subtítulos
     error: Se produjo un error
   errors:
     http429: 429 Demasiadas solicitudes a la API de subtítulos de youtube; inténtalo de nuevo más tarde

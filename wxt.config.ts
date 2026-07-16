@@ -12,7 +12,9 @@ import {
 const WXT_API_KEY_PATTERN = /^WXT_.*API_KEY/
 const ALLOWED_BUNDLED_API_KEYS = new Set(["WXT_POSTHOG_API_KEY"])
 const useLocalPackages = isLocalPackagesEnabled(process.env)
-const shouldSkipEnvValidation = process.env.WXT_SKIP_ENV_VALIDATION === "true"
+// This fork has no hosted service environment. Keep local builds zero-config while
+// allowing release maintainers to opt back into strict validation when needed.
+const shouldSkipEnvValidation = process.env.WXT_VALIDATE_ENV !== "true"
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
@@ -42,17 +44,7 @@ export default defineConfig({
       (browser === "chrome" || browser === "edge") && {
         key: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw2KhiXO2vySZtPu5pNSbyKhYavh8Be7gXmCZt8aJf6tQ/L3JK0qzL+3JSc/o20td3Jw+B2Dcw+EI93NAZr24xKnTNXQiJpuIuHb8xLXD0Ra/HrTVi4TJIhPdESogoG4uL6CD/F3TxfZJ2trX4Bt9cdAw1RGGeU+xU0g+YFfEka4ZUCpFAmTEw9H3/DU+nCp8yGaJWyiVgCTcFe38GZKEPt0iMJkTw956wz/iiafLx0pNG/RaztG9cAPoQOD2+SMFaeQ+b/G4OG17TYhzb09AhNBl6zSJ3jTKHSwuedCFwCce8Q/EchJfQZv71mjAE97bzwvkDYPCLj31Z5FE8HntMwIDAQAB",
       }),
-    permissions: [
-      "storage",
-      "tabs",
-      "alarms",
-      "cookies",
-      "contextMenus",
-      "identity",
-      "scripting",
-      "webNavigation",
-      ...(browser !== "firefox" ? ["offscreen", "sidePanel"] : []),
-    ],
+    permissions: ["storage", "tabs", "alarms", "scripting", "webNavigation"],
     host_permissions: [
       "*://*/*", // Required for scripting.executeScript in any frame
     ],
@@ -84,6 +76,7 @@ export default defineConfig({
     }),
   }),
   zip: {
+    name: "transfrog",
     includeSources: [".env.production"],
     excludeSources: ["docs/**/*", "assets/**/*", "repos/**/*", "readmes/**/*"],
   },

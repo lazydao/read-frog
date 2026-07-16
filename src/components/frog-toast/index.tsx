@@ -2,7 +2,7 @@ import { kebabCase } from "case-anything"
 import * as React from "react"
 import { Toaster } from "sonner"
 import { browser } from "#imports"
-import frogIcon from "@/assets/icons/read-frog.png?url&no-inline"
+import frogIcon from "@/assets/icons/transfrog.png?url&no-inline"
 import { APP_NAME } from "@/utils/constants/app"
 
 const frogIconUrl = new URL(frogIcon, browser.runtime.getURL("/")).href

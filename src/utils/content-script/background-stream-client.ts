@@ -1,5 +1,4 @@
 import type {
-  BackgroundStreamNoteSuggestionSerializablePayload,
   BackgroundStreamResponseMap,
   BackgroundStreamStructuredObjectSerializablePayload,
   BackgroundStreamTextSerializablePayload,
@@ -12,7 +11,6 @@ export interface ContentScriptStreamOptions<TResponse = string> {
   onChunk?: (data: TResponse) => void
   keepAliveIntervalMs?: number
 }
-
 export function streamBackgroundText(
   serializablePayload: BackgroundStreamTextSerializablePayload,
   options: ContentScriptStreamOptions<BackgroundStreamResponseMap["streamText"]> = {},
@@ -30,17 +28,6 @@ export function streamBackgroundStructuredObject(
 ) {
   return createPortStreamPromise<BackgroundStreamResponseMap["streamStructuredObject"]>(
     BACKGROUND_STREAM_PORTS.streamStructuredObject,
-    serializablePayload,
-    options,
-  )
-}
-
-export function streamBackgroundNoteSuggestion(
-  serializablePayload: BackgroundStreamNoteSuggestionSerializablePayload,
-  options: ContentScriptStreamOptions<BackgroundStreamResponseMap["streamNoteSuggestion"]> = {},
-) {
-  return createPortStreamPromise<BackgroundStreamResponseMap["streamNoteSuggestion"]>(
-    BACKGROUND_STREAM_PORTS.streamNoteSuggestion,
     serializablePayload,
     options,
   )

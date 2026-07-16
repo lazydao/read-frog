@@ -11,6 +11,8 @@ export const FEATURE_KEYS = [
   "inputTranslation",
 ] as const
 
+export const CORE_FEATURE_KEYS = ["translate", "videoSubtitles"] as const
+
 export type FeatureKey = (typeof FEATURE_KEYS)[number]
 
 export interface FeatureProviderDef {

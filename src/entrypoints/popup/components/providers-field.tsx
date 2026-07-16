@@ -11,7 +11,7 @@ import { Avatar, AvatarGroup, AvatarGroupCount, AvatarImage } from "@/components
 import { Button } from "@/components/ui/base-ui/button"
 import { Drawer, DrawerBody, DrawerContent, DrawerTrigger } from "@/components/ui/base-ui/drawer"
 import { configAtom, configFieldsAtomMap } from "@/utils/atoms/config"
-import { FEATURE_KEYS, FEATURE_PROVIDER_DEFS } from "@/utils/constants/feature-providers"
+import { CORE_FEATURE_KEYS, FEATURE_PROVIDER_DEFS } from "@/utils/constants/feature-providers"
 import { i18n } from "@/utils/i18n"
 import { getProviderLogo, getProviderName } from "@/utils/providers/provider-display"
 import { getSelectableProvidersForCapability } from "@/utils/providers/provider-registry"
@@ -32,15 +32,8 @@ function getSelectedProviderOptions(config: Config, providersConfig: ProvidersCo
     selectedProviders.push(selectedProvider)
   }
 
-  for (const featureKey of FEATURE_KEYS) {
+  for (const featureKey of CORE_FEATURE_KEYS) {
     addProvider(featureKey, FEATURE_PROVIDER_DEFS[featureKey].getProviderId(config))
-  }
-
-  for (const action of config.selectionToolbar.customActions) {
-    if (action.enabled === false) {
-      continue
-    }
-    addProvider("selectionToolbar.customAction", action.providerId)
   }
 
   return selectedProviders
