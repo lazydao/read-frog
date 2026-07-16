@@ -1,6 +1,7 @@
 import { i18n } from "@/utils/i18n"
 import { PageLayout } from "../../components/page-layout"
 import AppearanceSettings from "./appearance-settings"
+import { ConfigTransfer } from "./config-transfer"
 import FeatureProvidersConfig from "./feature-providers-config"
 import LanguageDetectionConfig from "./language-detection-config"
 import SiteControlMode from "./site-control-mode"
@@ -17,6 +18,7 @@ export function GeneralPage() {
       <SiteControlMode />
       <UiLanguageSelector />
       <AppearanceSettings />
+      <ConfigTransfer />
     </PageLayout>
   )
 }

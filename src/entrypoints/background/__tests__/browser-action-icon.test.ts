@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { browser, storage } from "#imports"
-import { getTranslationStateKey } from "@/utils/constants/storage-keys"
+import { getTabProcessingStateKey } from "@/utils/constants/storage-keys"
 
 const setIconMock = vi.fn<(...args: any[]) => any>()
+const setBadgeTextMock = vi.fn<(...args: any[]) => any>()
+const setBadgeBackgroundColorMock = vi.fn<(...args: any[]) => any>()
 const storageGetItemMock = vi.fn<(...args: any[]) => any>()
+const storageRemoveItemMock = vi.fn<(...args: any[]) => any>()
 const storageOnChangedAddListenerMock = vi.fn<(...args: any[]) => any>()
 const webNavigationOnCommittedAddListenerMock = vi.fn<(...args: any[]) => any>()
+const webNavigationOnHistoryStateUpdatedAddListenerMock = vi.fn<(...args: any[]) => any>()
+const tabsOnRemovedAddListenerMock = vi.fn<(...args: any[]) => any>()
 
 const DEFAULT_ACTION_ICON_PATHS = {
   16: "/icon/16.png",
@@ -21,17 +26,13 @@ const ACTIVE_ACTION_ICON_PATHS = {
 
 function getStorageChangeListener() {
   const listener = storageOnChangedAddListenerMock.mock.calls.at(-1)?.[0]
-  if (!listener) {
-    throw new Error("Expected storage.session.onChanged listener to be registered")
-  }
+  if (!listener) throw new Error("Expected storage.session.onChanged listener")
   return listener as (changes: Record<string, { newValue?: unknown }>) => Promise<void>
 }
 
 function getOnCommittedListener() {
   const listener = webNavigationOnCommittedAddListenerMock.mock.calls.at(-1)?.[0]
-  if (!listener) {
-    throw new Error("Expected webNavigation.onCommitted listener to be registered")
-  }
+  if (!listener) throw new Error("Expected webNavigation.onCommitted listener")
   return listener as (details: { tabId: number; frameId: number; url: string }) => Promise<void>
 }
 
@@ -41,24 +42,64 @@ async function setupSubject() {
 }
 
 describe("browser action icon", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks()
 
     browser.action.setIcon = setIconMock
+    browser.action.setBadgeText = setBadgeTextMock
+    browser.action.setBadgeBackgroundColor = setBadgeBackgroundColorMock
     browser.storage.session.onChanged.addListener = storageOnChangedAddListenerMock
     browser.webNavigation.onCommitted.addListener = webNavigationOnCommittedAddListenerMock
+    browser.webNavigation.onHistoryStateUpdated.addListener =
+      webNavigationOnHistoryStateUpdatedAddListenerMock
+    browser.tabs.onRemoved.addListener = tabsOnRemovedAddListenerMock
     storage.getItem = storageGetItemMock
+    storage.removeItem = storageRemoveItemMock
 
     setIconMock.mockResolvedValue(undefined)
+    setBadgeTextMock.mockResolvedValue(undefined)
+    setBadgeBackgroundColorMock.mockResolvedValue(undefined)
     storageGetItemMock.mockResolvedValue(undefined)
+    storageRemoveItemMock.mockResolvedValue(undefined)
+
+    const { resetTabProcessingRuntimeForTests } = await import("../tab-processing-state")
+    resetTabProcessingRuntimeForTests()
   })
 
-  it("updates the tab icon when translation state changes", async () => {
+  it("shows a processing badge while translation requests are running", async () => {
     await setupSubject()
 
     await getStorageChangeListener()({
-      "translationState.42": {
-        newValue: { enabled: true, origin: "https://example.com" },
+      "tabProcessingState.42": {
+        newValue: {
+          status: "processing",
+          features: ["page"],
+          url: "https://example.com/article",
+        },
+      },
+    })
+
+    expect(setIconMock).toHaveBeenCalledWith({
+      tabId: 42,
+      path: DEFAULT_ACTION_ICON_PATHS,
+    })
+    expect(setBadgeTextMock).toHaveBeenCalledWith({ tabId: 42, text: "…" })
+    expect(setBadgeBackgroundColorMock).toHaveBeenCalledWith({
+      tabId: 42,
+      color: "#F59E0B",
+    })
+  })
+
+  it("shows the active icon when the current page has been processed", async () => {
+    await setupSubject()
+
+    await getStorageChangeListener()({
+      "tabProcessingState.42": {
+        newValue: {
+          status: "done",
+          features: ["subtitles"],
+          url: "https://www.youtube.com/watch?v=abc",
+        },
       },
     })
 
@@ -66,64 +107,24 @@ describe("browser action icon", () => {
       tabId: 42,
       path: ACTIVE_ACTION_ICON_PATHS,
     })
+    expect(setBadgeTextMock).toHaveBeenCalledWith({ tabId: 42, text: "" })
   })
 
-  it("restores the active icon after same-origin top-frame navigation", async () => {
+  it("returns to the default icon after a top-frame navigation", async () => {
     await setupSubject()
-    storageGetItemMock.mockResolvedValue({
-      enabled: true,
-      origin: "https://example.com",
-    })
 
     await getOnCommittedListener()({
       tabId: 42,
       frameId: 0,
-      url: "https://example.com/articles/2?from=feed#comments",
+      url: "https://example.com/next",
     })
 
-    expect(storageGetItemMock).toHaveBeenCalledWith(getTranslationStateKey(42))
-    expect(setIconMock).toHaveBeenCalledWith({
-      tabId: 42,
-      path: ACTIVE_ACTION_ICON_PATHS,
-    })
-  })
-
-  it("uses the default icon after cross-origin top-frame navigation", async () => {
-    await setupSubject()
-    storageGetItemMock.mockResolvedValue({
-      enabled: true,
-      origin: "https://example.com",
-    })
-
-    await getOnCommittedListener()({
-      tabId: 42,
-      frameId: 0,
-      url: "https://other.example.com/articles/2",
-    })
-
+    expect(storageRemoveItemMock).toHaveBeenCalledWith(getTabProcessingStateKey(42))
     expect(setIconMock).toHaveBeenCalledWith({
       tabId: 42,
       path: DEFAULT_ACTION_ICON_PATHS,
     })
-  })
-
-  it.each([
-    ["disabled", { enabled: false }],
-    ["missing", undefined],
-  ])("uses the default icon when translation state is %s", async (_label, state) => {
-    await setupSubject()
-    storageGetItemMock.mockResolvedValue(state)
-
-    await getOnCommittedListener()({
-      tabId: 42,
-      frameId: 0,
-      url: "https://example.com/articles/2",
-    })
-
-    expect(setIconMock).toHaveBeenCalledWith({
-      tabId: 42,
-      path: DEFAULT_ACTION_ICON_PATHS,
-    })
+    expect(setBadgeTextMock).toHaveBeenCalledWith({ tabId: 42, text: "" })
   })
 
   it("ignores iframe navigation", async () => {
@@ -135,7 +136,7 @@ describe("browser action icon", () => {
       url: "https://embed.example.net/frame",
     })
 
-    expect(storageGetItemMock).not.toHaveBeenCalled()
+    expect(storageRemoveItemMock).not.toHaveBeenCalled()
     expect(setIconMock).not.toHaveBeenCalled()
   })
 })
