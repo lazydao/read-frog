@@ -17,8 +17,8 @@ function App() {
     <>
       <div className="flex flex-col gap-4 bg-background px-6 pt-5 pb-4">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold">Read Frog</span>
-          <span className="text-xs text-muted-foreground">Core</span>
+          <span className="text-sm font-semibold">TransFrog</span>
+          <span className="text-xs text-muted-foreground">Page + Video</span>
         </div>
         <LanguageOptionsSelector />
         <ProvidersField />

@@ -1,66 +1,94 @@
-# Read Frog Core
+<p align="center">
+  <img src="./assets/branding/transfrog-icon.png" alt="TransFrog" width="144" height="144">
+</p>
 
-Read Frog Core is a focused fork of [Read Frog](https://github.com/mengxi-ream/read-frog).
-It keeps the two translation workflows we use:
+<h1 align="center">TransFrog</h1>
 
-- full-page web translation, including bilingual and translation-only modes;
-- YouTube subtitle translation for videos with available captions.
+<p align="center">
+  A focused browser extension for translating web pages and YouTube captions with your own models.
+</p>
 
-The extension continues to support user-configured AI and translation providers, including
-OpenAI-compatible custom endpoints and local/self-hosted models.
+TransFrog is a streamlined fork of [Read Frog](https://github.com/mengxi-ream/read-frog).
+It keeps the two translation workflows we care about, removes the surrounding learning-product
+suite, and does not require a TransFrog-hosted backend.
 
-## Scope
+## Features
 
-The fork intentionally excludes the broader language-learning product surface:
+- Full-page translation with bilingual and translation-only display modes.
+- YouTube caption translation for videos that already provide captions.
+- User-configured AI and translation providers.
+- OpenAI-compatible custom endpoints and local/self-hosted models such as Ollama.
+- Context-aware translation using page or video metadata.
+- Custom prompts, translation styles, site rules, and request controls.
+- Local browser configuration with no TransFrog account or cloud service.
 
-- hosted accounts, Notebase, flashcards, and cloud configuration sync;
-- text-to-speech and input translation;
-- selection actions, floating overlays, context-menu tools, and side panels;
-- translation hub, statistics, blog notifications, onboarding, and telemetry.
+## Proudly focused
 
-Legacy configuration fields are retained during the first cleanup phase so existing local
-configurations remain readable. Dead schemas and dependencies will be removed in follow-up
-iterations after the core page and subtitle workflows are stable.
+TransFrog is deliberately smaller than a general language-learning or AI-assistant extension.
+
+| Workflow         | Included                                           | Intentionally excluded                                      |
+| ---------------- | -------------------------------------------------- | ----------------------------------------------------------- |
+| Web pages        | Full-page translation, bilingual mode, site rules  | Selection tools, floating overlays, input translation       |
+| Video            | YouTube caption translation                        | Speech recognition, dubbing, video editing                  |
+| Models           | Official providers, custom endpoints, local models | Bundled paid backend or mandatory hosted API                |
+| Product surface  | Popup and focused settings                         | Accounts, Notebase, Translation Hub, statistics, onboarding |
+| Browser services | Local storage and translation cache                | Telemetry, cloud backup, TTS, side panel                    |
+
+## Privacy and model access
+
+TransFrog has no project-hosted account or translation backend. Translation requests are sent
+directly to the provider endpoint configured by the user. API keys and settings remain in the
+browser profile. The privacy and retention policy of the selected provider still applies.
+
+## Build and install
+
+Requirements: Node.js 22.22 or newer and Corepack.
+
+```bash
+corepack enable
+pnpm install --frozen-lockfile
+pnpm package:chrome
+```
+
+The package command creates:
+
+- `.output/chrome-mv3` — unpacked Chrome/Edge extension;
+- `.output/transfrog-<version>-chrome.zip` — distributable archive.
+
+To install the unpacked build:
+
+1. Open `chrome://extensions` or `edge://extensions`.
+2. Enable developer mode.
+3. Select **Load unpacked**.
+4. Choose `.output/chrome-mv3`.
+
+After rebuilding, return to the extensions page and reload TransFrog.
 
 ## Development
 
 ```bash
-corepack enable
 pnpm install --frozen-lockfile
 pnpm type-check
 SKIP_FREE_API=true pnpm test
 pnpm build
 ```
 
-On PowerShell, use `$env:SKIP_FREE_API="true"` before running tests.
+On PowerShell, set `$env:SKIP_FREE_API="true"` before running the test command.
 
-## Build and install locally
+## Project policy
 
-Node.js 22.22 or newer is required. A clean checkout only needs two commands:
-
-```bash
-pnpm install --frozen-lockfile
-pnpm package:chrome
-```
-
-The package command builds the Chrome Manifest V3 extension and writes both the
-unpacked extension and an installable zip under `.output/`.
-
-To use the unpacked build in Chrome or Edge:
-
-1. Open `chrome://extensions` or `edge://extensions`.
-2. Enable developer mode.
-3. Choose **Load unpacked** and select `.output/chrome-mv3`.
-
-Run `pnpm package:chrome` again after source changes, then reload the extension on
-the browser extensions page. No hosted Read Frog environment variables are required.
-
-## Upstream policy
-
-This fork does not merge every upstream change. Relevant provider, browser compatibility,
-security, page translation, and subtitle fixes should be cherry-picked intentionally.
+TransFrog does not automatically merge every upstream Read Frog change. Provider, browser
+compatibility, security, page-translation, and subtitle fixes should be reviewed and
+cherry-picked intentionally. Internal `read-frog-*` storage keys and CSS identifiers are retained
+where changing them would break existing local configurations or page rules.
 
 ## License and attribution
 
-Read Frog Core is a modified version of Read Frog and remains licensed under GPL-3.0.
-The original project and its contributors retain attribution for their work.
+TransFrog is a modified version of
+[Read Frog](https://github.com/mengxi-ream/read-frog). Thanks to the Read Frog authors and
+contributors for the original work.
+
+This project is distributed under the GNU General Public License version 3. See
+[LICENSE](./LICENSE) for the full license text. TransFrog preserves the GPLv3 terms, keeps the
+modified source available under the same license, and clearly identifies itself as an independent
+fork so issues in this project are not attributed to the upstream maintainers.

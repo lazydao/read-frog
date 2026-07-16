@@ -1,6 +1,6 @@
 import type { LLMProviderTypes } from "@/types/config/provider"
-import { APP_NAME } from "@read-frog/definitions"
 import { env } from "@/env"
+import { APP_NAME } from "@/utils/constants/app"
 
 export const DEFAULT_PROVIDER_HEADERS: Partial<Record<LLMProviderTypes, Record<string, string>>> = {
   anthropic: {

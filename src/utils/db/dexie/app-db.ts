@@ -1,7 +1,6 @@
 import type { EntityTable } from "dexie"
-import { upperCamelCase } from "case-anything"
 import Dexie from "dexie"
-import { APP_NAME } from "@/utils/constants/app"
+import { LEGACY_DATABASE_NAME } from "@/utils/constants/app"
 import AiSegmentationCache from "./tables/ai-segmentation-cache"
 import ArticleSummaryCache from "./tables/article-summary-cache"
 import BatchRequestRecord from "./tables/batch-request-record"
@@ -17,7 +16,8 @@ export default class AppDB extends Dexie {
   aiSegmentationCache!: EntityTable<AiSegmentationCache, "key">
 
   constructor() {
-    super(`${upperCamelCase(APP_NAME)}DB`)
+    // Preserve the existing cache database while the visible product name changes.
+    super(LEGACY_DATABASE_NAME)
     this.version(1).stores({
       translationCache: `
         key,

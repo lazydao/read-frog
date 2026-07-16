@@ -1,5 +1,5 @@
 ---
-"@read-frog/extension": minor
+"@transfrog/extension": minor
 ---
 
-feat(core): focus the extension on web page and YouTube subtitle translation, with zero-config local builds that do not require upstream hosted-service variables
+feat(core): introduce TransFrog for web page and YouTube caption translation, with zero-config local builds that do not require upstream hosted-service variables
