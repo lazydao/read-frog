@@ -4,9 +4,6 @@ import type {
   FeatureUsageContext,
   FeatureUsedEventProperties,
 } from "@/types/analytics"
-import { ANALYTICS_FEATURE_USED_EVENT } from "@/utils/constants/analytics"
-import { logger } from "@/utils/logger"
-import { sendMessage } from "@/utils/message"
 
 export interface FeatureUsedEventInput extends FeatureUsageContext {
   outcome: AnalyticsOutcome
@@ -51,13 +48,7 @@ export function buildFeatureUsedEventProperties({
 }
 
 export async function trackFeatureUsed(input: FeatureUsedEventInput): Promise<void> {
-  try {
-    await sendMessage("trackFeatureUsedEvent", buildFeatureUsedEventProperties(input))
-  } catch (error) {
-    if (typeof logger.warn === "function") {
-      logger.warn(`[Analytics] Failed to track ${ANALYTICS_FEATURE_USED_EVENT}`, error)
-    }
-  }
+  void input
 }
 
 export async function trackFeatureAttempt<T>(

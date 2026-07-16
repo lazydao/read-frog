@@ -1,7 +1,5 @@
 import type { Browser } from "#imports"
 import type {
-  BackgroundNoteSuggestionStreamSnapshot,
-  BackgroundStreamNoteSuggestionSerializablePayload,
   BackgroundStreamPortName,
   BackgroundStreamSnapshot,
   BackgroundStreamStructuredObjectSerializablePayload,
@@ -21,12 +19,8 @@ import { z } from "zod"
 import { BACKGROUND_STREAM_PORTS } from "@/types/background-stream"
 import { createStructuredObjectSchema } from "@/utils/ai/structured-object-schema"
 import { extractAISDKErrorMessage } from "@/utils/error/extract-message"
-import { i18n } from "@/utils/i18n"
 import { logger } from "@/utils/logger"
-import { backgroundOrpcClient } from "@/utils/orpc/background-client"
 import { getModelById } from "@/utils/providers/model"
-import { isBuiltInAiProviderId } from "@/utils/providers/provider-registry"
-import { saveSuggestionEnvelopeSchema } from "@/utils/save-suggestion/types"
 
 const invalidStreamStartPayloadMessage = "Invalid stream start payload"
 const aiStreamProtocolErrorMessage = "Invalid AI stream response."
@@ -293,48 +287,6 @@ function getStreamPartError(part: Record<string, unknown>): unknown {
     : new BackgroundStreamError("stream_protocol_error", aiStreamProtocolErrorMessage)
 }
 
-function isOrpcRateLimitError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) {
-    return false
-  }
-
-  const candidate = error as { code?: unknown; status?: unknown }
-  return candidate.status === 429 || candidate.code === "TOO_MANY_REQUESTS"
-}
-
-function getHostedAiRateLimitQuotaScope(error: unknown): "guest" | "user" | undefined {
-  if (!isRecord(error) || !isRecord(error.data)) {
-    return undefined
-  }
-
-  if (error.data.quotaScope === "guest" || error.data.quotaScope === "user") {
-    return error.data.quotaScope
-  }
-
-  return undefined
-}
-
-function getHostedAiRateLimitMessage(error: unknown): string {
-  switch (getHostedAiRateLimitQuotaScope(error)) {
-    case "guest":
-      return i18n.t("hostedAi.errors.guestRateLimited")
-    case "user":
-      return i18n.t("hostedAi.errors.userRateLimited")
-    default:
-      return i18n.t("hostedAi.errors.rateLimited")
-  }
-}
-
-function normalizeHostedAiError(error: unknown): unknown {
-  if (isOrpcRateLimitError(error)) {
-    return new BackgroundStreamError("rate_limited", getHostedAiRateLimitMessage(error), {
-      cause: error,
-    })
-  }
-
-  return error
-}
-
 function getStreamFinishReason(part: Record<string, unknown>): string | undefined {
   return typeof part.finishReason === "string" ? part.finishReason : undefined
 }
@@ -539,30 +491,6 @@ async function createLocalTextPartStream(
   return result.stream
 }
 
-async function createHostedTextPartStream(
-  serializablePayload: BackgroundStreamTextSerializablePayload,
-  signal?: AbortSignal,
-): Promise<AsyncIterable<unknown>> {
-  const { prompt, instructions, temperature } = serializablePayload
-
-  if (!instructions || !prompt) {
-    throw new BackgroundStreamError("invalid_request", "Invalid hosted AI request")
-  }
-
-  try {
-    return await backgroundOrpcClient.hostedAi.translate.streamText(
-      {
-        instructions,
-        prompt,
-        temperature,
-      },
-      { signal },
-    )
-  } catch (error) {
-    throw normalizeHostedAiError(error)
-  }
-}
-
 export async function runStreamTextInBackground(
   serializablePayload: BackgroundStreamTextSerializablePayload,
   options: StreamRuntimeOptions<BackgroundTextStreamSnapshot> = {},
@@ -573,9 +501,7 @@ export async function runStreamTextInBackground(
     throw new DOMException("stream aborted", "AbortError")
   }
 
-  const partStream = isBuiltInAiProviderId(serializablePayload.providerId)
-    ? await createHostedTextPartStream(serializablePayload, signal)
-    : await createLocalTextPartStream(serializablePayload, options)
+  const partStream = await createLocalTextPartStream(serializablePayload, options)
 
   return consumeTextPartStream(partStream, {
     onChunk,
@@ -607,31 +533,6 @@ async function createLocalStructuredObjectPartStream(
   return result.stream
 }
 
-async function createHostedStructuredObjectPartStream(
-  serializablePayload: BackgroundStreamStructuredObjectSerializablePayload,
-  signal?: AbortSignal,
-): Promise<AsyncIterable<unknown>> {
-  const { outputSchema, prompt, instructions, temperature } = serializablePayload
-
-  if (!instructions || !prompt) {
-    throw new BackgroundStreamError("invalid_request", "Invalid hosted AI request")
-  }
-
-  try {
-    return await backgroundOrpcClient.hostedAi.customAction.streamStructuredObject(
-      {
-        instructions,
-        prompt,
-        outputSchema,
-        temperature,
-      },
-      { signal },
-    )
-  } catch (error) {
-    throw normalizeHostedAiError(error)
-  }
-}
-
 export async function runStructuredObjectStreamInBackground(
   serializablePayload: BackgroundStreamStructuredObjectSerializablePayload,
   options: StreamRuntimeOptions<BackgroundStructuredObjectStreamSnapshot> = {},
@@ -643,51 +544,15 @@ export async function runStructuredObjectStreamInBackground(
   }
 
   const objectSchema = createStructuredObjectSchema(serializablePayload.outputSchema)
-  const partStream = isBuiltInAiProviderId(serializablePayload.providerId)
-    ? await createHostedStructuredObjectPartStream(serializablePayload, signal)
-    : await createLocalStructuredObjectPartStream(serializablePayload, objectSchema, options)
+  const partStream = await createLocalStructuredObjectPartStream(
+    serializablePayload,
+    objectSchema,
+    options,
+  )
 
   return consumeStructuredObjectPartStream(partStream, {
     objectSchema,
     onChunk,
-    signal,
-  })
-}
-
-export async function runNoteSuggestionStreamInBackground(
-  serializablePayload: BackgroundStreamNoteSuggestionSerializablePayload,
-  options: StreamRuntimeOptions<BackgroundNoteSuggestionStreamSnapshot> = {},
-): Promise<BackgroundNoteSuggestionStreamSnapshot> {
-  const { signal } = options
-  const { providerId, prompt, instructions, temperature } = serializablePayload
-
-  if (signal?.aborted) {
-    throw new DOMException("stream aborted", "AbortError")
-  }
-
-  // Note suggestion always runs on the hosted built-in AI: the fixed nested envelope
-  // schema lives server-side, so there is no local-provider path and no
-  // client-sent outputSchema. The shared consume/parse/validate logic is reused.
-  if (!isBuiltInAiProviderId(providerId) || !instructions || !prompt) {
-    throw new BackgroundStreamError(
-      "invalid_request",
-      "Note suggestion requires the hosted built-in AI provider with instructions and prompt",
-    )
-  }
-
-  let partStream: AsyncIterable<unknown>
-  try {
-    partStream = await backgroundOrpcClient.hostedAi.noteSuggestion.streamStructuredObject(
-      { instructions, prompt, temperature },
-      { signal },
-    )
-  } catch (error) {
-    throw normalizeHostedAiError(error)
-  }
-
-  // The card renders only the final result, so no onChunk forwarding.
-  return consumeStructuredObjectPartStream(partStream, {
-    objectSchema: saveSuggestionEnvelopeSchema,
     signal,
   })
 }
@@ -697,10 +562,6 @@ const parseStreamTextStartMessage =
 const parseStructuredObjectStartMessage =
   createStartMessageParser<BackgroundStreamStructuredObjectSerializablePayload>(
     structuredObjectPayloadSchema,
-  )
-const parseNoteSuggestionStartMessage =
-  createStartMessageParser<BackgroundStreamNoteSuggestionSerializablePayload>(
-    streamTextPayloadSchema,
   )
 
 export const handleStreamTextPort = createStreamPortHandler<
@@ -713,17 +574,11 @@ export const handleStreamStructuredObjectPort = createStreamPortHandler<
   BackgroundStructuredObjectStreamSnapshot
 >(runStructuredObjectStreamInBackground, parseStructuredObjectStartMessage)
 
-export const handleStreamNoteSuggestionPort = createStreamPortHandler<
-  BackgroundStreamNoteSuggestionSerializablePayload,
-  BackgroundNoteSuggestionStreamSnapshot
->(runNoteSuggestionStreamInBackground, parseNoteSuggestionStartMessage)
-
 export const BACKGROUND_STREAM_PORT_HANDLERS: Readonly<
   Record<BackgroundStreamPortName, StreamPortHandler>
 > = {
   [BACKGROUND_STREAM_PORTS.streamText]: handleStreamTextPort,
   [BACKGROUND_STREAM_PORTS.streamStructuredObject]: handleStreamStructuredObjectPort,
-  [BACKGROUND_STREAM_PORTS.streamNoteSuggestion]: handleStreamNoteSuggestionPort,
 }
 
 export function dispatchBackgroundStreamPort(port: Browser.runtime.Port): boolean {

@@ -2,7 +2,7 @@
   "name": "@read-frog/extension",
   "version": "1.41.0",
   "private": true,
-  "description": "Read Frog browser extension for language learning",
+  "description": "Focused browser extension for web page and YouTube subtitle translation",
   "type": "module",
   "scripts": {
     "build": "wxt build",

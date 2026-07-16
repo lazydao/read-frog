@@ -7,7 +7,6 @@ import { useHydrateAtoms } from "jotai/utils"
 import * as React from "react"
 import { HashRouter } from "react-router"
 import FrogToast from "@/components/frog-toast"
-import { HelpButton } from "@/components/help-button"
 import { ThemeProvider } from "@/components/providers/theme-provider"
 import { RecoveryBoundary } from "@/components/recovery/recovery-boundary"
 import { SidebarProvider } from "@/components/ui/base-ui/sidebar"
@@ -23,7 +22,6 @@ import { queryClient } from "@/utils/tanstack-query"
 import { applyTheme, getLocalThemeMode, isDarkMode } from "@/utils/theme"
 import App from "./app"
 import { AppSidebar } from "./app-sidebar"
-import { SettingsSearch } from "./command-palette/settings-search"
 import "@fontsource-variable/onest/index.css"
 import "@/assets/styles/theme.css"
 import "./style.css"
@@ -70,8 +68,6 @@ async function initApp() {
                       <RecoveryBoundary>
                         <AppSidebar />
                         <App />
-                        <HelpButton />
-                        <SettingsSearch />
                       </RecoveryBoundary>
                     </LocaleBoundary>
                   </TooltipProvider>

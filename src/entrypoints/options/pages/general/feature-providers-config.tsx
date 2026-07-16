@@ -14,6 +14,7 @@ export default function FeatureProvidersConfig() {
       description={i18n.t("options.general.featureProviders.description")}
     >
       <FeatureProviderSelectorList
+        includeCustomActions={false}
         renderApiKeyWarning={(providerConfig) =>
           needsApiKeyWarning(providerConfig) ? <SetApiKeyWarning /> : null
         }

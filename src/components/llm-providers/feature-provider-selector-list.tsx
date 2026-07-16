@@ -10,7 +10,7 @@ import { configAtom, configFieldsAtomMap, writeConfigAtom } from "@/utils/atoms/
 import { getProviderConfigById } from "@/utils/config/helpers"
 import {
   buildFeatureProviderPatch,
-  FEATURE_KEYS,
+  CORE_FEATURE_KEYS,
   FEATURE_PROVIDER_DEFS,
   getFeatureLabelI18nKey,
 } from "@/utils/constants/feature-providers"
@@ -149,12 +149,12 @@ export function FeatureProviderSelectorList({
   className,
   providerSelectorClassName = "w-full",
   providerSelectorTriggerSize,
-  includeCustomActions = true,
+  includeCustomActions = false,
   renderApiKeyWarning,
 }: FeatureProviderSelectorListProps) {
   return (
     <FieldGroup className={cn("gap-4", className)}>
-      {FEATURE_KEYS.map((featureKey) => (
+      {CORE_FEATURE_KEYS.map((featureKey) => (
         <FeatureProviderField
           key={featureKey}
           featureKey={featureKey}
