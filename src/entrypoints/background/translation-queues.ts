@@ -26,6 +26,32 @@ import { getTranslatePrompt } from "@/utils/prompts/translate"
 import { BatchQueue } from "@/utils/request/batch-queue"
 import { RequestQueue } from "@/utils/request/request-queue"
 import { ensureInitializedConfig } from "./config"
+import { beginTabProcessing, finishTabProcessing } from "./tab-processing-state"
+
+interface ProcessingTab {
+  id?: number
+  url?: string
+}
+
+async function withTabProcessing<T>(
+  tab: ProcessingTab | undefined,
+  feature: "page" | "subtitles",
+  work: () => Promise<T>,
+): Promise<T> {
+  if (typeof tab?.id !== "number") {
+    return await work()
+  }
+
+  const token = await beginTabProcessing(tab.id, feature, tab.url)
+  try {
+    const result = await work()
+    await finishTabProcessing(token, true)
+    return result
+  } catch (error) {
+    await finishTabProcessing(token, false)
+    throw error
+  }
+}
 
 export function parseBatchResult(result: string): string[] {
   return result
@@ -267,72 +293,74 @@ export async function setUpWebPageTranslationQueue() {
   })
 
   onMessage("enqueueTranslateRequest", async (message) => {
-    const {
-      data: {
-        text,
-        langConfig,
-        providerConfig,
-        scheduleAt,
-        hash,
-        textFormat,
-        webTitle,
-        webDescription,
-        webContent,
-        webSummary,
-      },
-    } = message
-
-    const validateHtmlAttributeMarkers =
-      textFormat === "html" && hasHtmlAttributeMarkerProtocol(text)
-    if (validateHtmlAttributeMarkers) {
-      assertHtmlAttributeMarkerIntegrity(text, text)
-    }
-
-    // Check cache first
-    if (hash) {
-      const cachedTranslation = await getValidatedCachedTranslation(
-        hash,
-        text,
-        validateHtmlAttributeMarkers,
-      )
-      if (cachedTranslation !== undefined) return cachedTranslation
-    }
-
-    let result: string
-    const context: WebPagePromptContext = {
-      webTitle: normalizePromptContextValue(webTitle),
-      webDescription: normalizePromptContextValue(webDescription),
-      webContent: normalizePromptContextValue(webContent),
-      webSummary: normalizePromptContextValue(webSummary),
-    }
-
-    if (shouldUseBatchQueue(providerConfig)) {
-      const data = { text, langConfig, providerConfig, hash, scheduleAt, context }
-      result = await batchQueue.enqueue(data)
-    } else {
-      // Create thunk based on type and params
-      const thunk = (signal?: AbortSignal) =>
-        executeTranslate(text, langConfig, providerConfig, getTranslatePrompt, {
+    return await withTabProcessing(message.sender?.tab, "page", async () => {
+      const {
+        data: {
+          text,
+          langConfig,
+          providerConfig,
+          scheduleAt,
+          hash,
           textFormat,
-          signal,
+          webTitle,
+          webDescription,
+          webContent,
+          webSummary,
+        },
+      } = message
+
+      const validateHtmlAttributeMarkers =
+        textFormat === "html" && hasHtmlAttributeMarkerProtocol(text)
+      if (validateHtmlAttributeMarkers) {
+        assertHtmlAttributeMarkerIntegrity(text, text)
+      }
+
+      // Check cache first
+      if (hash) {
+        const cachedTranslation = await getValidatedCachedTranslation(
+          hash,
+          text,
+          validateHtmlAttributeMarkers,
+        )
+        if (cachedTranslation !== undefined) return cachedTranslation
+      }
+
+      let result: string
+      const context: WebPagePromptContext = {
+        webTitle: normalizePromptContextValue(webTitle),
+        webDescription: normalizePromptContextValue(webDescription),
+        webContent: normalizePromptContextValue(webContent),
+        webSummary: normalizePromptContextValue(webSummary),
+      }
+
+      if (shouldUseBatchQueue(providerConfig)) {
+        const data = { text, langConfig, providerConfig, hash, scheduleAt, context }
+        result = await batchQueue.enqueue(data)
+      } else {
+        // Create thunk based on type and params
+        const thunk = (signal?: AbortSignal) =>
+          executeTranslate(text, langConfig, providerConfig, getTranslatePrompt, {
+            textFormat,
+            signal,
+          })
+        result = await requestQueue.enqueue(thunk, scheduleAt, hash)
+      }
+
+      if (validateHtmlAttributeMarkers) {
+        assertHtmlAttributeMarkerIntegrity(text, result)
+      }
+
+      // Cache the translation result if successful
+      if (result && hash) {
+        await db.translationCache.put({
+          key: hash,
+          translation: result,
+          createdAt: new Date(),
         })
-      result = await requestQueue.enqueue(thunk, scheduleAt, hash)
-    }
+      }
 
-    if (validateHtmlAttributeMarkers) {
-      assertHtmlAttributeMarkerIntegrity(text, result)
-    }
-
-    // Cache the translation result if successful
-    if (result && hash) {
-      await db.translationCache.put({
-        key: hash,
-        translation: result,
-        createdAt: new Date(),
-      })
-    }
-
-    return result
+      return result
+    })
   })
 
   onMessage("getOrGenerateWebPageSummary", async (message) => {
@@ -372,51 +400,55 @@ export async function setUpSubtitlesTranslationQueue() {
   })
 
   onMessage("enqueueSubtitlesTranslateRequest", async (message) => {
-    const {
-      data: {
-        text,
-        langConfig,
-        providerConfig,
-        scheduleAt,
-        hash,
-        webTitle,
-        webDescription,
-        summary,
-      },
-    } = message
+    return await withTabProcessing(message.sender?.tab, "subtitles", async () => {
+      const {
+        data: {
+          text,
+          langConfig,
+          providerConfig,
+          scheduleAt,
+          hash,
+          webTitle,
+          webDescription,
+          summary,
+        },
+      } = message
 
-    if (hash) {
-      const cached = await db.translationCache.get(hash)
-      if (cached) {
-        return cached.translation
+      if (hash) {
+        const cached = await db.translationCache.get(hash)
+        if (cached) {
+          return cached.translation
+        }
       }
-    }
 
-    let result: string
-    const context: SubtitlePromptContext = {
-      webTitle: normalizePromptContextValue(webTitle),
-      webDescription: normalizePromptContextValue(webDescription),
-      videoSummary: normalizePromptContextValue(summary),
-    }
+      let result: string
+      const context: SubtitlePromptContext = {
+        webTitle: normalizePromptContextValue(webTitle),
+        webDescription: normalizePromptContextValue(webDescription),
+        videoSummary: normalizePromptContextValue(summary),
+      }
 
-    if (shouldUseBatchQueue(providerConfig)) {
-      const data = { text, langConfig, providerConfig, hash, scheduleAt, context }
-      result = await batchQueue.enqueue(data)
-    } else {
-      const thunk = (signal?: AbortSignal) =>
-        executeTranslate(text, langConfig, providerConfig, getSubtitlesTranslatePrompt, { signal })
-      result = await requestQueue.enqueue(thunk, scheduleAt, hash)
-    }
+      if (shouldUseBatchQueue(providerConfig)) {
+        const data = { text, langConfig, providerConfig, hash, scheduleAt, context }
+        result = await batchQueue.enqueue(data)
+      } else {
+        const thunk = (signal?: AbortSignal) =>
+          executeTranslate(text, langConfig, providerConfig, getSubtitlesTranslatePrompt, {
+            signal,
+          })
+        result = await requestQueue.enqueue(thunk, scheduleAt, hash)
+      }
 
-    if (result && hash) {
-      await db.translationCache.put({
-        key: hash,
-        translation: result,
-        createdAt: new Date(),
-      })
-    }
+      if (result && hash) {
+        await db.translationCache.put({
+          key: hash,
+          translation: result,
+          createdAt: new Date(),
+        })
+      }
 
-    return result
+      return result
+    })
   })
 
   onMessage("getSubtitlesSummary", async (message) => {

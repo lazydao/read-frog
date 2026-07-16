@@ -13,6 +13,8 @@ const articleSummaryCachePutMock = vi.fn<(...args: any[]) => any>()
 const translationCacheGetMock = vi.fn<(...args: any[]) => any>()
 const translationCachePutMock = vi.fn<(...args: any[]) => any>()
 const translationCacheDeleteMock = vi.fn<(...args: any[]) => any>()
+const beginTabProcessingMock = vi.fn<(...args: any[]) => any>()
+const finishTabProcessingMock = vi.fn<(...args: any[]) => any>()
 
 vi.mock("@/utils/message", () => ({
   onMessage: onMessageMock,
@@ -48,12 +50,20 @@ vi.mock("@/utils/db/dexie/db", () => ({
   },
 }))
 
+vi.mock("../tab-processing-state", () => ({
+  beginTabProcessing: beginTabProcessingMock,
+  finishTabProcessing: finishTabProcessingMock,
+}))
+
 function getRegisteredMessageHandler(name: string) {
   const registration = onMessageMock.mock.calls.find((call) => call[0] === name)
   if (!registration) {
     throw new Error(`Message handler not registered: ${name}`)
   }
-  return registration[1] as (message: { data: Record<string, unknown> }) => Promise<unknown>
+  return registration[1] as (message: {
+    data: Record<string, unknown>
+    sender?: { tab?: { id?: number; url?: string } }
+  }) => Promise<unknown>
 }
 
 const llmProvider: ProviderConfig = {
@@ -112,6 +122,8 @@ describe("translation queue helpers", () => {
     translationCacheGetMock.mockResolvedValue(undefined)
     translationCachePutMock.mockResolvedValue(undefined)
     translationCacheDeleteMock.mockResolvedValue(undefined)
+    beginTabProcessingMock.mockResolvedValue({ id: 1, tabId: 42 })
+    finishTabProcessingMock.mockResolvedValue(undefined)
   })
 
   it("routes only llm providers through the batch queue", async () => {
@@ -220,6 +232,30 @@ describe("translation queue helpers", () => {
     expect(executeTranslateMock).toHaveBeenCalledTimes(1)
     // the shared item is sent once, not as a two-item batch
     expect(executeTranslateMock.mock.calls[0][0]).toBe("hello")
+  })
+
+  it("tracks the current tab while a page translation request runs", async () => {
+    executeTranslateMock.mockResolvedValue("translated")
+
+    const { setUpWebPageTranslationQueue } = await import("../translation-queues")
+    await setUpWebPageTranslationQueue()
+    const handler = getRegisteredMessageHandler("enqueueTranslateRequest")
+
+    await handler({
+      data: {
+        text: "hello",
+        langConfig: DEFAULT_CONFIG.language,
+        providerConfig: googleProvider,
+        scheduleAt: Date.now(),
+        hash: "tracked-request",
+      },
+      sender: {
+        tab: { id: 42, url: "https://example.com/article" },
+      },
+    })
+
+    expect(beginTabProcessingMock).toHaveBeenCalledWith(42, "page", "https://example.com/article")
+    expect(finishTabProcessingMock).toHaveBeenCalledWith({ id: 1, tabId: 42 }, true)
   })
 
   it("passes subtitle summary through the translation queue without generating a new summary", async () => {
