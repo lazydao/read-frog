@@ -165,12 +165,13 @@ function createBilingualWrapper(
 async function filterVirtualParagraphUnits(
   units: VirtualParagraphUnit[],
   config: Config,
+  bypassTargetLanguageSkip: boolean,
 ): Promise<VirtualParagraphUnit[]> {
   const included = await Promise.all(
     units.map(async (unit) => {
       if (isNumericContent(unit.text)) return false
       if (await shouldFilterSmallParagraph(unit.text, config)) return false
-      return !(await shouldSkipAsTargetLanguage(unit.text, config))
+      return bypassTargetLanguageSkip || !(await shouldSkipAsTargetLanguage(unit.text, config))
     }),
   )
   return units.filter((_, index) => included[index])
@@ -231,6 +232,7 @@ async function translateVirtualParagraphs(
   walkId: string,
   config: Config,
   forceBlockTranslation: boolean,
+  bypassTargetLanguageSkip: boolean,
 ): Promise<void> {
   const group: VirtualParagraphGroup = {
     id: `${walkId}:${virtualParagraphGroupSequence++}`,
@@ -248,7 +250,7 @@ async function translateVirtualParagraphs(
   const sourceTextSnapshot = collectSourceTextExcludingWrappers(layoutSource)
   let includedUnits: VirtualParagraphUnit[]
   try {
-    includedUnits = await filterVirtualParagraphUnits(units, config)
+    includedUnits = await filterVirtualParagraphUnits(units, config, bypassTargetLanguageSkip)
   } catch (error) {
     disposeVirtualParagraphGroup(group)
     throw error
@@ -397,6 +399,7 @@ export async function translateNodesBilingualMode(
           walkId,
           config,
           true,
+          toggle,
         )
         return
       }
@@ -454,11 +457,12 @@ export async function translateNodesBilingualMode(
 
     let shouldFilter: boolean
     try {
-      // Target-language skip runs here, BEFORE the wrapper/spinner is inserted,
-      // so same-language paragraphs never touch the DOM.
+      // Automatic/page translation skips target-language paragraphs before
+      // touching the DOM. A toggle is an explicit node-translation request,
+      // so it must honor the user's intent even on mixed-language pages.
       shouldFilter =
         (await shouldFilterSmallParagraph(textContent, config)) ||
-        (await shouldSkipAsTargetLanguage(textContent, config))
+        (!toggle && (await shouldSkipAsTargetLanguage(textContent, config)))
     } catch (error) {
       if (bilingualState) unregisterBilingualTranslationState(bilingualState)
       throw error
@@ -712,9 +716,10 @@ export async function translateNodeTranslationOnlyMode(
 
     if (await shouldFilterSmallParagraph(innerTextContent, config)) return
 
-    // Check the plain text, not the HTML string sent to the provider — franc
-    // on markup is noise. Runs before the wrapper is inserted into the DOM.
-    if (await shouldSkipAsTargetLanguage(innerTextContent, config)) return
+    // Explicit node translation (toggle=true) overrides target-language
+    // detection so users can translate foreign snippets on an otherwise
+    // target-language page.
+    if (!toggle && (await shouldSkipAsTargetLanguage(innerTextContent, config))) return
 
     const ownerDoc = getOwnerDocument(targetNode)
     const protectedHtml = protectTranslationHtmlAttributes(transNodes, ownerDoc)
