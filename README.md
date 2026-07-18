@@ -64,6 +64,35 @@ To install the unpacked build:
 
 After rebuilding, return to the extensions page and reload TransFrog.
 
+### macOS: Dia and Safari
+
+Build both macOS browser packages with:
+
+```bash
+pnpm package:macos
+```
+
+For Dia, open `chrome://extensions`, enable developer mode, choose **Load unpacked**, and select
+`.output/chrome-mv3`. Dia uses the same Manifest V3 package as Chrome.
+
+For a temporary Safari installation without Xcode:
+
+1. Open Safari Settings, enable **Show features for web developers** under **Advanced**.
+2. Under **Developer**, enable **Allow unsigned extensions**.
+3. Click **Add Temporary Extension** and select `.output/transfrog-<version>-safari.zip`.
+
+Safari removes a temporary extension after 24 hours or when Safari quits. To generate a native
+macOS container for regular use, install the full Xcode application and run:
+
+```bash
+pnpm generate:safari:project
+```
+
+This creates an Xcode project under `.output/safari-xcode` and prints its exact path. Open the
+project in Xcode, select a development team when available, then build and run the `TransFrog`
+macOS scheme once. Enable TransFrog under Safari Settings > Extensions and grant access to the
+websites you want to translate.
+
 ## Development
 
 ```bash
