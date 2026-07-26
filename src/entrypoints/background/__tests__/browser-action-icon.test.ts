@@ -137,4 +137,19 @@ describe("browser action icon", () => {
     expect(storageRemoveItemMock).not.toHaveBeenCalled()
     expect(setIconMock).not.toHaveBeenCalled()
   })
+
+  it("registers listeners when history navigation events are unavailable", async () => {
+    const historyStateUpdated = browser.webNavigation.onHistoryStateUpdated
+    ;(browser.webNavigation as { onHistoryStateUpdated?: unknown }).onHistoryStateUpdated =
+      undefined
+
+    try {
+      await expect(setupSubject()).resolves.toBeUndefined()
+      expect(webNavigationOnCommittedAddListenerMock).toHaveBeenCalledOnce()
+      expect(webNavigationOnHistoryStateUpdatedAddListenerMock).not.toHaveBeenCalled()
+    } finally {
+      ;(browser.webNavigation as { onHistoryStateUpdated?: unknown }).onHistoryStateUpdated =
+        historyStateUpdated
+    }
+  })
 })

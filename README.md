@@ -64,6 +64,55 @@ To install the unpacked build:
 
 After rebuilding, return to the extensions page and reload TransFrog.
 
+### macOS: Dia and Safari
+
+Build both macOS browser packages with:
+
+```bash
+pnpm package:macos
+```
+
+For Dia, open `chrome://extensions`, enable developer mode, choose **Load unpacked**, and select
+`.output/chrome-mv3`. Dia uses the same Manifest V3 package as Chrome.
+
+For a temporary Safari installation without Xcode:
+
+1. Open Safari Settings, enable **Show features for web developers** under **Advanced**.
+2. Under **Developer**, enable **Allow unsigned extensions**.
+3. Click **Add Temporary Extension** and select `.output/transfrog-<version>-safari.zip`.
+
+If Safari reports that an app or service is interfering with clicking, quit apps that use
+Accessibility or Screen Recording permissions before trying again. `Typeless` triggered this
+protection during our macOS test. After the extension is added, those apps can be reopened. See
+[Apple's troubleshooting guidance](https://support.apple.com/en-us/108379) for the underlying
+Safari security feature.
+
+Safari removes a temporary extension after 24 hours or when Safari quits. To generate a native
+macOS container for regular use, install the full Xcode application and run:
+
+```bash
+pnpm generate:safari:project
+```
+
+This creates an Xcode project under `.output/safari-xcode` and prints its exact path. Open the
+project in Xcode, select a development team when available, then build and run the `TransFrog`
+macOS scheme once. Enable TransFrog under Safari Settings > Extensions and grant access to the
+websites you want to translate.
+
+### GitHub Actions packaging
+
+The `Package browser extensions` workflow provides a manual, artifact-only build:
+
+1. Enable GitHub Actions for the repository.
+2. Open **Actions** > **Package browser extensions**.
+3. Choose **Run workflow** and select the branch to package.
+4. Download the `transfrog-browser-packages-<run number>` artifact.
+
+The artifact contains Chrome/Dia, Edge, Firefox, and Safari ZIP packages, plus the Firefox source
+archive. The workflow has read-only repository permissions, does not run automatically on pushes,
+and does not publish a GitHub Release. It also does not produce a signed Safari app; native Safari
+distribution still requires Xcode and an Apple signing identity.
+
 ## Development
 
 ```bash

@@ -81,7 +81,9 @@ export function registerActionIconListeners() {
     }
   })
 
-  browser.webNavigation.onHistoryStateUpdated.addListener(async (details) => {
+  // Safari does not expose onHistoryStateUpdated. Keep the background worker
+  // alive there while retaining SPA badge resets in Chromium and Firefox.
+  browser.webNavigation.onHistoryStateUpdated?.addListener(async (details) => {
     if (details.frameId !== 0) return
 
     try {

@@ -1,0 +1,50 @@
+name: Package browser extensions
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Build browser packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check types and lint
+        run: pnpm lint
+
+      - name: Build distributable packages
+        run: pnpm zip:all
+
+      - name: Upload browser packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: transfrog-browser-packages-${{ github.run_number }}
+          path: .output/transfrog-*.zip
+          if-no-files-found: error
+          retention-days: 14
