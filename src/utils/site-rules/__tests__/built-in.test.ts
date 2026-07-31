@@ -132,4 +132,11 @@ describe("built-in site rules", () => {
     expect(resolved.excludeSelector).toContain(".forum-topbar")
     expect(resolved.excludeSelector).toContain(".forum-bottombar")
   })
+
+  it("includes antirez article prose stored in a pre element", () => {
+    const resolved = resolveSiteRule("https://antirez.com/news/168", BUILT_IN_SITE_RULES, [], [])
+
+    expect(resolved.includeSelector).toContain("article > h2")
+    expect(resolved.includeSelector).toContain("article.comment > pre")
+  })
 })

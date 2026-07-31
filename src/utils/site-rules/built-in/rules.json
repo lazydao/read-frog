@@ -38,6 +38,12 @@
     ]
   },
   {
+    "id": "antirez",
+    "description": "Translate antirez article prose stored in a pre element",
+    "matches": "antirez.com/news/*",
+    "includeSelectors": ["article > h2", "article.comment > pre"]
+  },
+  {
     "id": "pdf",
     "matches": "https://app.infread.com/pdf/*",
     "includeSelectors": ["#viewerContainer p"],

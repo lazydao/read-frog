@@ -152,6 +152,20 @@ export function isWithinIncludeScope(element: HTMLElement, config: Config): bool
   return includeSelector === null || element.closest(includeSelector) !== null
 }
 
+/**
+ * <pre> is skipped by default because it usually contains source code. A few
+ * sites use it for prose instead, so an exact site-rule include can opt that
+ * specific element back into translation without reopening other unsafe tags.
+ */
+function isExplicitlyIncludedPreElement(element: HTMLElement, config: Config): boolean {
+  if (element.tagName !== "PRE") {
+    return false
+  }
+
+  const { includeSelector } = getEffectiveSiteRule(config, window.location.href)
+  return includeSelector !== null && element.matches(includeSelector)
+}
+
 export function isDontWalkIntoButTranslateAsChildElement(
   element: HTMLElement,
   config?: Config,
@@ -192,7 +206,9 @@ export function isDontWalkIntoAndDontTranslateAsChildElement(
     config.translate.page.range !== "all" &&
     MAIN_CONTENT_IGNORE_TAGS.has(element.tagName) &&
     !isInsideContentContainer(element)
-  const dontWalkInvalidTag = DONT_WALK_AND_TRANSLATE_TAGS.has(element.tagName)
+  const dontWalkInvalidTag =
+    DONT_WALK_AND_TRANSLATE_TAGS.has(element.tagName) &&
+    !isExplicitlyIncludedPreElement(element, config)
   const dontWalkCSS =
     window.getComputedStyle(element).display === "none" ||
     window.getComputedStyle(element).visibility === "hidden"
