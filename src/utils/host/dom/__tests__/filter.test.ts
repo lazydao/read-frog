@@ -172,6 +172,34 @@ describe("isDontWalkIntoAndDontTranslateAsChildElement", () => {
     expect(isDontWalkIntoAndDontTranslateAsChildElement(element, DEFAULT_CONFIG)).toBe(true)
   })
 
+  it("should allow a PRE tag explicitly included by a site rule", () => {
+    setHost("pre-prose.example")
+    const config = configWithSiteRule({
+      id: "pre-prose",
+      matches: "pre-prose.example",
+      includeSelectors: ["article > pre"],
+    })
+    const article = document.createElement("article")
+    const element = document.createElement("pre")
+    article.appendChild(element)
+    document.body.appendChild(article)
+
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(element, config)).toBe(false)
+    document.body.removeChild(article)
+  })
+
+  it("should keep unsafe non-PRE tags blocked even when explicitly included", () => {
+    setHost("unsafe-include.example")
+    const config = configWithSiteRule({
+      id: "unsafe-include",
+      matches: "unsafe-include.example",
+      includeSelectors: ["script"],
+    })
+    const element = document.createElement("script")
+
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(element, config)).toBe(true)
+  })
+
   it("should return false for regular elements", () => {
     const element = document.createElement("div")
     expect(isDontWalkIntoAndDontTranslateAsChildElement(element, DEFAULT_CONFIG)).toBe(false)

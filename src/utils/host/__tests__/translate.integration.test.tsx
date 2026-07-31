@@ -2772,6 +2772,32 @@ describe("translate", () => {
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
         expect(node.textContent).toBe(codeContent)
       })
+
+      it("bilingual mode: should translate antirez prose stored in a pre tag", async () => {
+        await withHost("antirez.com/news/168", async () => {
+          const paragraphs = [
+            "Automatic programming dramatically speeds up writing software.",
+            "LLMs offer a new way to do QA on top of existing methodologies.",
+          ]
+          vi.mocked(translateTextForPage).mockClear()
+
+          render(
+            <article className="comment">
+              <pre data-testid="article-body" style={{ whiteSpace: "pre" }}>
+                {paragraphs.join("\n\n")}
+              </pre>
+            </article>,
+          )
+          const articleBody = screen.getByTestId("article-body")
+
+          await removeOrShowPageTranslation("bilingual", true)
+
+          expect(translateTextForPage).toHaveBeenCalledTimes(2)
+          expect(translateTextForPage).toHaveBeenNthCalledWith(1, paragraphs[0], "plain")
+          expect(translateTextForPage).toHaveBeenNthCalledWith(2, paragraphs[1], "plain")
+          expect(articleBody.querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)).toHaveLength(2)
+        })
+      })
     })
 
     describe("github diff table - should not translate review code snippets", () => {
