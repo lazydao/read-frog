@@ -1,8 +1,8 @@
 import type { SegmentationPipeline } from "./segmentation-pipeline"
 import type { SubtitlesVideoContext } from "@/utils/subtitles/processor/translator"
 import type { SubtitlesFragment, SubtitlesState } from "@/utils/subtitles/types"
-import { getLocalConfig } from "@/utils/config/storage"
 import { TRANSLATE_LOOK_AHEAD_MS, TRANSLATION_BATCH_SIZE } from "@/utils/constants/subtitles"
+import { sendMessage } from "@/utils/message"
 import { translateSubtitles } from "@/utils/subtitles/processor/translator"
 
 export interface TranslationCoordinatorOptions {
@@ -140,7 +140,7 @@ export class TranslationCoordinator {
         this.failedStarts.add(f.start)
       })
 
-      const config = await getLocalConfig()
+      const config = await sendMessage("getInitialConfig", undefined)
       const displayMode = config?.videoSubtitles?.style.displayMode
       const fallback =
         displayMode === "translationOnly"

@@ -1,10 +1,10 @@
 import type { Config } from "@/types/config/config"
 import type { WebPagePromptContext } from "@/types/content"
-import { getLocalConfig } from "@/utils/config/storage"
 import {
   HTML_ATTRIBUTE_MARKER,
   parseHtmlAttributeMarkers,
 } from "@/utils/host/translate/html-attribute-markers"
+import { sendMessage } from "@/utils/message"
 import { DEFAULT_CONFIG } from "../constants/config"
 import {
   BATCH_SEPARATOR,
@@ -125,6 +125,6 @@ export async function getTranslatePrompt(
   input: string,
   options?: TranslatePromptOptions<WebPagePromptContext>,
 ): Promise<TranslatePromptResult> {
-  const config = (await getLocalConfig()) ?? DEFAULT_CONFIG
+  const config = (await sendMessage("getInitialConfig", undefined)) ?? DEFAULT_CONFIG
   return getTranslatePromptFromConfig(config.translate, targetLang, input, options)
 }

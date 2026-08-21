@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
 import { SegmentationPipeline } from "../segmentation-pipeline"
 
-vi.mock("@/utils/config/storage", () => ({
-  getLocalConfig: vi.fn<(...args: any[]) => any>().mockResolvedValue({
+vi.mock("@/utils/message", () => ({
+  sendMessage: vi.fn<(...args: any[]) => any>().mockResolvedValue({
     videoSubtitles: {
       aiSegmentation: true,
     },

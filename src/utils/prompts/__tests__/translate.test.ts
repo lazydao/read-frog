@@ -6,8 +6,8 @@ import { HTML_ATTRIBUTE_MARKER } from "@/utils/host/translate/html-attribute-mar
 import { getSubtitlesTranslatePrompt } from "../subtitles"
 import { getTranslatePromptFromConfig } from "../translate"
 
-vi.mock("@/utils/config/storage", () => ({
-  getLocalConfig: vi.fn<(...args: any[]) => any>(),
+vi.mock("@/utils/message", () => ({
+  sendMessage: vi.fn<(...args: any[]) => any>(),
 }))
 
 let mockGetLocalConfig: any
@@ -22,7 +22,7 @@ const defaultTranslatePromptConfig: Pick<Config["translate"], "customPromptsConf
 describe("translate prompt tokens", () => {
   beforeEach(async () => {
     vi.clearAllMocks()
-    mockGetLocalConfig = vi.mocked((await import("@/utils/config/storage")).getLocalConfig)
+    mockGetLocalConfig = vi.mocked((await import("@/utils/message")).sendMessage)
   })
 
   it("replaces new translate prompt tokens from config", () => {

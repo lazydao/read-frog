@@ -5,7 +5,7 @@ import { NOTRANSLATE_CLASS, REACT_SHADOW_HOST_CLASS } from "@/utils/constants/do
 import { SUBTITLES_THEME } from "@/utils/constants/subtitles"
 import { ShadowHostBuilder } from "@/utils/react-shadow-host/shadow-host-builder"
 import { mirrorDynamicStyles } from "@/utils/styles"
-import { applyTheme } from "@/utils/theme"
+import { applyTheme } from "@/utils/theme-dom"
 
 const SUBTITLES_TOAST_HOST_ID = "read-frog-subtitles-toast-host"
 

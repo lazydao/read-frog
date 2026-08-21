@@ -1,7 +1,7 @@
 import "@/utils/zod-config"
 import { defineContentScript } from "#imports"
-import { getLocalConfig } from "@/utils/config/storage"
 import { initI18n } from "@/utils/i18n"
+import { sendMessage } from "@/utils/message"
 
 declare global {
   interface Window {
@@ -17,7 +17,7 @@ export default defineContentScript({
     if (window.__READ_FROG_SUBTITLES_INJECTED__) return
     window.__READ_FROG_SUBTITLES_INJECTED__ = true
 
-    const config = await getLocalConfig()
+    const config = await sendMessage("getInitialConfig", undefined)
     if (!config?.videoSubtitles?.enabled) {
       window.__READ_FROG_SUBTITLES_INJECTED__ = false
       return

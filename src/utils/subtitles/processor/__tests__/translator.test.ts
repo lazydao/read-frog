@@ -2,13 +2,9 @@ import type { ProviderConfig } from "@/types/config/provider"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { DEFAULT_CONFIG } from "@/utils/constants/config"
 
-const getLocalConfigMock = vi.fn<(...args: any[]) => any>()
+const getInitialConfigMock = vi.fn<(...args: any[]) => any>()
 const sendMessageMock = vi.fn<(...args: any[]) => any>()
 const getSubtitlesTranslatePromptMock = vi.fn<(...args: any[]) => any>()
-
-vi.mock("@/utils/config/storage", () => ({
-  getLocalConfig: getLocalConfigMock,
-}))
 
 vi.mock("@/utils/message", () => ({
   sendMessage: sendMessageMock,
@@ -18,12 +14,18 @@ vi.mock("@/utils/prompts/subtitles", () => ({
   getSubtitlesTranslatePrompt: getSubtitlesTranslatePromptMock,
 }))
 
+function getMessagePayloads(type: string) {
+  return sendMessageMock.mock.calls
+    .filter(([messageType]) => messageType === type)
+    .map(([, data]) => data)
+}
+
 describe("subtitles translator", () => {
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
 
-    getLocalConfigMock.mockResolvedValue({
+    getInitialConfigMock.mockResolvedValue({
       ...DEFAULT_CONFIG,
       translate: {
         ...DEFAULT_CONFIG.translate,
@@ -39,7 +41,9 @@ describe("subtitles translator", () => {
       systemPrompt: "system",
       prompt: "prompt",
     })
-    sendMessageMock.mockResolvedValue("translated subtitle")
+    sendMessageMock.mockImplementation((type: string) =>
+      type === "getInitialConfig" ? getInitialConfigMock() : Promise.resolve("translated subtitle"),
+    )
   })
 
   it("includes summary in subtitle requests and uses it in the cache hash", async () => {
@@ -55,8 +59,7 @@ describe("subtitles translator", () => {
     await translateSubtitles(fragments, { ...baseContext, summary: "Ready summary" })
     await translateSubtitles(fragments, baseContext)
 
-    const firstRequest = sendMessageMock.mock.calls[0][1]
-    const secondRequest = sendMessageMock.mock.calls[1][1]
+    const [firstRequest, secondRequest] = getMessagePayloads("enqueueSubtitlesTranslateRequest")
 
     expect(firstRequest.webTitle).toBe("Video title")
     expect(firstRequest.webDescription).toBe("Video description")
@@ -88,14 +91,17 @@ describe("subtitles translator", () => {
       summary: "summary-b",
     })
 
-    const firstHash = sendMessageMock.mock.calls[0][1].hash
-    const secondHash = sendMessageMock.mock.calls[1][1].hash
+    const [firstRequest, secondRequest] = getMessagePayloads("enqueueSubtitlesTranslateRequest")
+    const firstHash = firstRequest.hash
+    const secondHash = secondRequest.hash
 
     expect(firstHash).not.toBe(secondHash)
   })
 
   it("requests subtitle summary through a dedicated background message", async () => {
-    sendMessageMock.mockResolvedValue("Generated summary")
+    sendMessageMock.mockImplementation((type: string) =>
+      type === "getInitialConfig" ? getInitialConfigMock() : Promise.resolve("Generated summary"),
+    )
 
     const { fetchSubtitlesSummary } = await import("../translator")
     const result = await fetchSubtitlesSummary({
@@ -117,7 +123,9 @@ describe("subtitles translator", () => {
   it("returns null when subtitle summary is unavailable", async () => {
     const { fetchSubtitlesSummary } = await import("../translator")
 
-    sendMessageMock.mockResolvedValueOnce(null)
+    sendMessageMock.mockImplementation((type: string) =>
+      type === "getInitialConfig" ? getInitialConfigMock() : Promise.resolve(null),
+    )
     const emptyFromBackground = await fetchSubtitlesSummary({
       videoTitle: "Video title",
       subtitlesTextContent: "subtitle transcript",
@@ -125,7 +133,7 @@ describe("subtitles translator", () => {
 
     expect(emptyFromBackground).toBeNull()
 
-    getLocalConfigMock.mockResolvedValueOnce({
+    getInitialConfigMock.mockResolvedValueOnce({
       ...DEFAULT_CONFIG,
       translate: {
         ...DEFAULT_CONFIG.translate,
@@ -154,13 +162,13 @@ describe("subtitles translator", () => {
       summary: null,
     })
 
-    const request = sendMessageMock.mock.calls[0][1]
+    const [request] = getMessagePayloads("enqueueSubtitlesTranslateRequest")
     expect(request.webTitle).toBe("Video title")
     expect(request.summary).toBeNull()
   })
 
   it("passes title and description when AI content awareness is disabled", async () => {
-    getLocalConfigMock.mockResolvedValueOnce({
+    getInitialConfigMock.mockResolvedValueOnce({
       ...DEFAULT_CONFIG,
       translate: {
         ...DEFAULT_CONFIG.translate,
@@ -180,7 +188,7 @@ describe("subtitles translator", () => {
       summary: "Ready summary",
     })
 
-    const request = sendMessageMock.mock.calls[0][1]
+    const [request] = getMessagePayloads("enqueueSubtitlesTranslateRequest")
     expect(request.webTitle).toBe("Video title")
     expect(request.webDescription).toBe("Video description")
     expect(request.summary).toBeUndefined()
@@ -213,7 +221,7 @@ describe("subtitles translator", () => {
       configSnapshot,
     )
 
-    expect(getLocalConfigMock).not.toHaveBeenCalled()
+    expect(getInitialConfigMock).not.toHaveBeenCalled()
     expect(sendMessageMock).toHaveBeenCalledWith(
       "enqueueSubtitlesTranslateRequest",
       expect.objectContaining({ langConfig: configSnapshot.language }),

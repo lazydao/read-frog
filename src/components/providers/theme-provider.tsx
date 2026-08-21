@@ -2,7 +2,7 @@ import type { Theme, ThemeMode } from "@/types/config/theme"
 import { useAtom } from "jotai"
 import { createContext, use, useLayoutEffect, useMemo, useSyncExternalStore } from "react"
 import { themeModeAtom } from "@/utils/atoms/theme"
-import { applyTheme } from "@/utils/theme"
+import { applyTheme } from "@/utils/theme-dom"
 
 interface ThemeContextI {
   theme: Theme

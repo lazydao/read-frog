@@ -1,5 +1,4 @@
 import type { Config } from "@/types/config/config"
-import { getLocalConfig } from "@/utils/config/storage"
 import { DEFAULT_CONFIG } from "@/utils/constants/config"
 import { removeOrShowNodeTranslation } from "@/utils/host/translate/node-manipulation"
 import { sendMessage } from "@/utils/message"
@@ -17,7 +16,7 @@ export function registerNodeTranslationTriggers(): () => void {
   const { signal } = ac
 
   const getCurrentConfig = async (): Promise<Config | null> => {
-    const config = await getLocalConfig()
+    const config = await sendMessage("getInitialConfig", undefined)
     if (signal.aborted) return null
     return config ?? DEFAULT_CONFIG
   }

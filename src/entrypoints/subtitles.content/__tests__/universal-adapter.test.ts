@@ -2,14 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { UniversalVideoAdapter } from "../universal-adapter"
 
 const mocks = vi.hoisted(() => ({
-  getLocalConfig: vi.fn<(...args: any[]) => any>(),
+  sendMessage: vi.fn<(...args: any[]) => any>(),
 }))
 
-vi.mock("@/utils/config/storage", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/utils/config/storage")>()
+vi.mock("@/utils/message", () => {
   return {
-    ...actual,
-    getLocalConfig: mocks.getLocalConfig,
+    sendMessage: mocks.sendMessage,
   }
 })
 
@@ -54,7 +52,7 @@ describe("universalVideoAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.stubGlobal("document", { title: "Test video" })
-    mocks.getLocalConfig.mockResolvedValue({
+    mocks.sendMessage.mockResolvedValue({
       language: {},
       providersConfig: [],
       videoSubtitles: {

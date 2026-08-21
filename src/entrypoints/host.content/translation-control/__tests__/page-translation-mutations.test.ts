@@ -48,10 +48,6 @@ vi.mock("@/utils/config/languages", () => ({
   getDetectedCodeFromStorage: mockGetDetectedCodeFromStorage,
 }))
 
-vi.mock("@/utils/config/storage", () => ({
-  getLocalConfig: mockGetLocalConfig,
-}))
-
 vi.mock("@/utils/crypto-polyfill", () => ({
   getRandomUUID: mockGetRandomUUID,
 }))
@@ -238,7 +234,9 @@ describe("pageTranslationManager mutation re-walk", () => {
     mockTranslateTextForPageTitle.mockResolvedValue("")
     mockTranslateNodesBilingualMode.mockReset().mockResolvedValue(undefined)
     mockValidateTranslationConfigAndToast.mockReturnValue(true)
-    mockSendMessage.mockResolvedValue(undefined)
+    mockSendMessage.mockImplementation((type: string) =>
+      type === "getInitialConfig" ? mockGetLocalConfig() : Promise.resolve(undefined),
+    )
   })
 
   it("observes and translates hidden accordion content after it becomes visible", async () => {

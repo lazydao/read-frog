@@ -32,10 +32,6 @@ vi.mock("@/utils/config/languages", () => ({
   getDetectedCodeFromStorage: mockGetDetectedCodeFromStorage,
 }))
 
-vi.mock("@/utils/config/storage", () => ({
-  getLocalConfig: mockGetLocalConfig,
-}))
-
 vi.mock("@/utils/host/dom/filter", () => ({
   hasNoWalkAncestor: vi.fn<(...args: any[]) => any>().mockReturnValue(false),
   isDontWalkIntoAndDontTranslateAsChildElement: vi
@@ -122,7 +118,9 @@ describe("pageTranslationManager title handling", () => {
       webContent: "Article body",
     })
     mockValidateTranslationConfigAndToast.mockReturnValue(true)
-    mockSendMessage.mockResolvedValue(undefined)
+    mockSendMessage.mockImplementation((type: string) =>
+      type === "getInitialConfig" ? mockGetLocalConfig() : Promise.resolve(undefined),
+    )
   })
 
   it("does not prime webpage context on start for non-llm translation", async () => {

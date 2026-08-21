@@ -1,7 +1,7 @@
 import "@/utils/zod-config"
 import { defineContentScript } from "#imports"
-import { getLocalConfig } from "@/utils/config/storage"
 import { initI18n } from "@/utils/i18n"
+import { sendMessage } from "@/utils/message"
 import {
   clearEffectiveSiteControlUrl,
   getEffectiveSiteControlUrl,
@@ -22,7 +22,7 @@ export default defineContentScript({
     if (window.__READ_FROG_HOST_INJECTED__) return
     window.__READ_FROG_HOST_INJECTED__ = true
 
-    const initialConfig = await getLocalConfig()
+    const initialConfig = await sendMessage("getInitialConfig", undefined)
     const siteControlUrl = getEffectiveSiteControlUrl(window.location.href)
 
     if (!isSiteEnabled(siteControlUrl, initialConfig)) {

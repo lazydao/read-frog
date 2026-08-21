@@ -7,7 +7,6 @@ import { toast } from "sonner"
 import { ANALYTICS_FEATURE, ANALYTICS_SURFACE } from "@/types/analytics"
 import { createFeatureUsageContext, trackFeatureUsed } from "@/utils/analytics"
 import { getProviderConfigById } from "@/utils/config/helpers"
-import { getLocalConfig } from "@/utils/config/storage"
 import {
   HIDE_NATIVE_CAPTIONS_STYLE_ID,
   NAVIGATION_HANDLER_DELAY,
@@ -17,6 +16,7 @@ import { getDocumentDescription } from "@/utils/content/metadata"
 import { resolveLanguageCodeFromLocale } from "@/utils/content/page-language"
 import { waitForElement } from "@/utils/dom/wait-for-element"
 import { i18n } from "@/utils/i18n"
+import { sendMessage } from "@/utils/message"
 import { OverlaySubtitlesError, ToastSubtitlesError } from "@/utils/subtitles/errors"
 import { optimizeSubtitles } from "@/utils/subtitles/processor/optimizer"
 import {
@@ -136,7 +136,7 @@ export class UniversalVideoAdapter {
   }
 
   private async restorePosition() {
-    const config = await getLocalConfig()
+    const config = await sendMessage("getInitialConfig", undefined)
     const position = config?.videoSubtitles?.position
     if (position) {
       subtitlesStore.set(subtitlesPositionAtom, { ...position })
@@ -328,7 +328,7 @@ export class UniversalVideoAdapter {
   }
 
   private async tryAutoStartSubtitles() {
-    const config = await getLocalConfig()
+    const config = await sendMessage("getInitialConfig", undefined)
     const autoStart = config?.videoSubtitles?.autoStart ?? false
 
     if (!autoStart) return
@@ -503,7 +503,7 @@ export class UniversalVideoAdapter {
   }
 
   private async shouldSkipTranslationForCurrentTrack(): Promise<boolean> {
-    const config = await getLocalConfig()
+    const config = await sendMessage("getInitialConfig", undefined)
     const targetLanguage = config?.language.targetCode
     const sourceLanguage = resolveLanguageCodeFromLocale(this.subtitlesFetcher.getSourceLanguage())
 
@@ -527,7 +527,7 @@ export class UniversalVideoAdapter {
     const scheduler = this.subtitlesScheduler
     if (!scheduler) return
 
-    const config = await getLocalConfig()
+    const config = await sendMessage("getInitialConfig", undefined)
 
     const useAiSegmentation = !!config?.videoSubtitles?.aiSegmentation
     const providerConfig = config

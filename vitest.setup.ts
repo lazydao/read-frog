@@ -1,6 +1,15 @@
 import { vi } from "vitest"
 import "@testing-library/jest-dom"
 
+// Content-side config access is routed through extension messaging. Provide the
+// background half for tests that mount config-backed atoms without a real service worker.
+vi.mock("@/utils/message", () => ({
+  onMessage: vi.fn<(...args: any[]) => any>(() => () => {}),
+  sendMessage: vi.fn<(...args: any[]) => any>((type: string) =>
+    Promise.resolve(type === "getInitialConfig" || type === "getThemeMode" ? null : undefined),
+  ),
+}))
+
 // Keep test output quiet by default. Individual tests can still spy on these
 // methods when they need to assert logging behavior.
 // eslint-disable-next-line no-console

@@ -2,8 +2,8 @@ import type { PageTranslationManager } from "../page-translation"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { bindTranslationShortcutKey } from "../bind-translation-shortcut"
 
-const { mockGetLocalConfig, mockRegister, mockUnregister } = vi.hoisted(() => ({
-  mockGetLocalConfig: vi.fn<(...args: any[]) => any>(),
+const { mockSendMessage, mockRegister, mockUnregister } = vi.hoisted(() => ({
+  mockSendMessage: vi.fn<(...args: any[]) => any>(),
   mockRegister: vi.fn<(...args: any[]) => any>(),
   mockUnregister: vi.fn<(...args: any[]) => any>(),
 }))
@@ -21,8 +21,8 @@ vi.mock("@tanstack/hotkeys", async (importOriginal) => {
   }
 })
 
-vi.mock("@/utils/config/storage", () => ({
-  getLocalConfig: mockGetLocalConfig,
+vi.mock("@/utils/message", () => ({
+  sendMessage: mockSendMessage,
 }))
 
 function createManager(isActive = false) {
@@ -46,7 +46,7 @@ describe("bindTranslationShortcutKey", () => {
   })
 
   it("registers the page shortcut with the TanStack manager options", async () => {
-    mockGetLocalConfig.mockResolvedValue({
+    mockSendMessage.mockResolvedValue({
       translate: {
         page: {
           shortcut: "Mod+E",
@@ -72,7 +72,7 @@ describe("bindTranslationShortcutKey", () => {
   })
 
   it("toggles page translation through the registered callback", async () => {
-    mockGetLocalConfig.mockResolvedValue({
+    mockSendMessage.mockResolvedValue({
       translate: {
         page: {
           shortcut: "Mod+E",
@@ -90,7 +90,7 @@ describe("bindTranslationShortcutKey", () => {
     mockRegister.mockReturnValue({
       unregister: mockUnregister,
     })
-    mockGetLocalConfig.mockResolvedValue({
+    mockSendMessage.mockResolvedValue({
       translate: {
         page: {
           shortcut: "Mod+E",
@@ -106,7 +106,7 @@ describe("bindTranslationShortcutKey", () => {
   })
 
   it("skips registration when the shortcut is empty", async () => {
-    mockGetLocalConfig.mockResolvedValue({
+    mockSendMessage.mockResolvedValue({
       translate: {
         page: {
           shortcut: "",

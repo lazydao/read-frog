@@ -3,7 +3,7 @@ import type { PageTranslationManager } from "./page-translation"
 import { HotkeyManager } from "@tanstack/hotkeys"
 import { ANALYTICS_FEATURE, ANALYTICS_SURFACE } from "@/types/analytics"
 import { createFeatureUsageContext } from "@/utils/analytics"
-import { getLocalConfig } from "@/utils/config/storage"
+import { sendMessage } from "@/utils/message"
 import {
   isPageTranslationShortcutEmpty,
   isValidConfiguredPageTranslationShortcut,
@@ -14,7 +14,7 @@ import {
  * Uses sync cached config inside the hotkey callback to avoid async overhead.
  */
 export async function bindTranslationShortcutKey(pageTranslationManager: PageTranslationManager) {
-  const config = await getLocalConfig()
+  const config = await sendMessage("getInitialConfig", undefined)
   if (!config || isPageTranslationShortcutEmpty(config.translate.page.shortcut)) {
     return () => {}
   }

@@ -1,21 +1,21 @@
 import { IconReload } from "@tabler/icons-react"
-import { useAtomValue } from "jotai"
 import { use } from "react"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/base-ui/tooltip"
-import { configAtom } from "@/utils/atoms/config"
+import { DEFAULT_CONFIG } from "@/utils/constants/config"
 import { getRandomUUID } from "@/utils/crypto-polyfill"
 import {
   translateNodesBilingualMode,
   translateNodeTranslationOnlyMode,
 } from "@/utils/host/translate/node-manipulation"
+import { sendMessage } from "@/utils/message"
 import { ShadowWrapperContext } from "@/utils/react-shadow-host/create-shadow-host"
 
 export function RetryButton({ nodes }: { nodes: ChildNode[] }) {
   const shadowWrapper = use(ShadowWrapperContext)
-  const config = useAtomValue(configAtom)
-  const translationMode = config.translate.mode
 
   const handleRetry = async () => {
+    const config = (await sendMessage("getInitialConfig", undefined)) ?? DEFAULT_CONFIG
+    const translationMode = config.translate.mode
     const walkId = getRandomUUID()
     if (translationMode === "bilingual") {
       await translateNodesBilingualMode(nodes, walkId, config)

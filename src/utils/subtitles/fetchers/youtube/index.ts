@@ -1,7 +1,6 @@
 import type { SubtitlesFragment } from "../../types"
 import type { SubtitlesFetcher } from "../types"
 import type { CaptionTrack, PlayerData, YoutubeTimedText } from "./types"
-import { getLocalConfig } from "@/utils/config/storage"
 import {
   ENSURE_SUBTITLES_REQUEST_TYPE,
   ENSURE_SUBTITLES_RESPONSE_TYPE,
@@ -19,6 +18,7 @@ import {
 } from "@/utils/constants/subtitles"
 import { getRandomUUID } from "@/utils/crypto-polyfill"
 import { i18n } from "@/utils/i18n"
+import { sendMessage } from "@/utils/message"
 import { OverlaySubtitlesError } from "@/utils/subtitles/errors"
 import { getYoutubeVideoId } from "@/utils/subtitles/video-id"
 import { detectFormat } from "./format-detector"
@@ -421,7 +421,7 @@ export class YoutubeSubtitlesFetcher implements SubtitlesFetcher {
   }
 
   private async processRawEvents(events: YoutubeTimedText[]): Promise<SubtitlesFragment[]> {
-    const config = await getLocalConfig()
+    const config = await sendMessage("getInitialConfig", undefined)
     const enableAISegmentation = config?.videoSubtitles?.aiSegmentation ?? false
 
     this.preSegmented = false

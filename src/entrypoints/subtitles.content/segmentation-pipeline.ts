@@ -1,6 +1,6 @@
 import type { SubtitlesFragment } from "@/utils/subtitles/types"
-import { getLocalConfig } from "@/utils/config/storage"
 import { PROCESS_LOOK_AHEAD_MS } from "@/utils/constants/subtitles"
+import { sendMessage } from "@/utils/message"
 import { aiSegmentBlock } from "@/utils/subtitles/processor/ai-segmentation"
 import { optimizeSubtitles } from "@/utils/subtitles/processor/optimizer"
 
@@ -92,7 +92,7 @@ export class SegmentationPipeline {
     }
 
     try {
-      const config = await getLocalConfig()
+      const config = await sendMessage("getInitialConfig", undefined)
       if (config) {
         const segmented = await aiSegmentBlock(chunk, config)
         const optimized = optimizeSubtitles(segmented, this.getSourceLanguage())

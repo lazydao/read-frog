@@ -4,7 +4,6 @@ import debounce from "debounce"
 import { ANALYTICS_FEATURE, ANALYTICS_SURFACE } from "@/types/analytics"
 import { isLLMProviderConfig } from "@/types/config/provider"
 import { createFeatureUsageContext, trackFeatureUsed } from "@/utils/analytics"
-import { getLocalConfig } from "@/utils/config/storage"
 import {
   CONTENT_WRAPPER_CLASS,
   REACT_SHADOW_HOST_CLASS,
@@ -142,7 +141,7 @@ export class PageTranslationManager implements IPageTranslationManager {
 
     const trackedContext = window === window.top ? analyticsContext : undefined
 
-    const config = await getLocalConfig()
+    const config = await sendMessage("getInitialConfig", undefined)
     if (!config) {
       console.warn("Config is not initialized")
       if (trackedContext) {
@@ -199,7 +198,7 @@ export class PageTranslationManager implements IPageTranslationManager {
           if (entry.isIntersecting) {
             if (isHTMLElement(entry.target)) {
               if (!entry.target.closest(`.${CONTENT_WRAPPER_CLASS}`)) {
-                const currentConfig = await getLocalConfig()
+                const currentConfig = await sendMessage("getInitialConfig", undefined)
                 if (!currentConfig) {
                   logger.error("Global config is not initialized")
                   return
@@ -475,7 +474,7 @@ export class PageTranslationManager implements IPageTranslationManager {
     const observer = this.intersectionObserver
     if (!this.walkId || !observer) return
 
-    const config = existingConfig ?? (await getLocalConfig())
+    const config = existingConfig ?? (await sendMessage("getInitialConfig", undefined))
     if (!config) {
       logger.error("Global config is not initialized")
       return
@@ -697,7 +696,7 @@ export class PageTranslationManager implements IPageTranslationManager {
     const needsTraversalHandling = hostRecords.some((record) => record.type !== "characterData")
     if (staleTranslatedSources.size === 0 && !needsTraversalHandling) return
 
-    const config = await getLocalConfig()
+    const config = await sendMessage("getInitialConfig", undefined)
     if (!config) {
       logger.error("Global config is not initialized")
       return
@@ -828,7 +827,7 @@ export class PageTranslationManager implements IPageTranslationManager {
     if (!this.isPageTranslating || this.translationSessionVersion !== sessionVersion) return
     // No pending mutation version means the source converged in the meantime.
     if (this.translatedSourceMutationVersions.get(source) === undefined) return
-    const config = await getLocalConfig()
+    const config = await sendMessage("getInitialConfig", undefined)
     if (!config) return
     if (!this.isPageTranslating || this.translationSessionVersion !== sessionVersion) return
     await this.retranslateChangedSource(source, config, sessionVersion)

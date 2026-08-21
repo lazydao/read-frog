@@ -12,11 +12,6 @@ import {
 } from "@/utils/host/translate/translate-variants"
 import { getTranslatePrompt } from "@/utils/prompts/translate"
 
-// Mock dependencies
-vi.mock("@/utils/config/storage", () => ({
-  getLocalConfig: vi.fn<(...args: any[]) => any>(),
-}))
-
 vi.mock("@/utils/message", () => ({
   sendMessage: vi.fn<(...args: any[]) => any>(),
 }))
@@ -64,6 +59,22 @@ let mockGetOrCreateWebPageContext: any
 let mockGetOrGenerateWebPageSummary: any
 let mockDetectLanguage: any
 
+function mockConfigAwareMessageResponse(response: string) {
+  mockSendMessage.mockImplementation(async (type: string) => {
+    if (type === "getInitialConfig") {
+      return await mockGetConfigFromStorage()
+    }
+    if (type === "enqueueTranslateRequest") {
+      return response
+    }
+    return undefined
+  })
+}
+
+function getMessageCalls(type: string) {
+  return mockSendMessage.mock.calls.filter(([messageType]: [string]) => messageType === type)
+}
+
 describe("translate-text", () => {
   beforeEach(async () => {
     vi.clearAllMocks()
@@ -82,7 +93,7 @@ describe("translate-text", () => {
     mockDeepLXTranslate = vi.mocked(
       (await import("@/utils/host/translate/api/deeplx")).deeplxTranslate,
     )
-    mockGetConfigFromStorage = vi.mocked((await import("@/utils/config/storage")).getLocalConfig)
+    mockGetConfigFromStorage = vi.fn<(...args: any[]) => any>()
     mockGetTranslatePrompt = vi.mocked(
       (await import("@/utils/prompts/translate")).getTranslatePrompt,
     )
@@ -106,6 +117,12 @@ describe("translate-text", () => {
 
     // Mock getConfigFromStorage to return DEFAULT_CONFIG
     mockGetConfigFromStorage.mockResolvedValue(DEFAULT_CONFIG)
+    mockSendMessage.mockImplementation(async (type: string) => {
+      if (type === "getInitialConfig") {
+        return await mockGetConfigFromStorage()
+      }
+      return undefined
+    })
 
     // Mock getTranslatePrompt to return a simple prompt pair
     mockGetTranslatePrompt.mockResolvedValue({
@@ -116,7 +133,7 @@ describe("translate-text", () => {
 
   describe("translateTextForPage", () => {
     it("should send message with correct parameters", async () => {
-      mockSendMessage.mockResolvedValue("translated text")
+      mockConfigAwareMessageResponse("translated text")
 
       const result = await translateTextForPage("test text")
 
@@ -136,17 +153,17 @@ describe("translate-text", () => {
     })
 
     it("maps a full no-translation sentinel response to an empty string", async () => {
-      mockSendMessage.mockResolvedValue(NO_TRANSLATION_SENTINEL)
+      mockConfigAwareMessageResponse(NO_TRANSLATION_SENTINEL)
 
       const result = await translateTextForPage("test text")
 
       expect(result).toBe("")
-      expect(mockSendMessage).toHaveBeenCalledOnce()
+      expect(getMessageCalls("enqueueTranslateRequest")).toHaveLength(1)
     })
 
     it("returns a response containing the sentinel inside longer text verbatim", async () => {
       const mixed = `some translation ${NO_TRANSLATION_SENTINEL}`
-      mockSendMessage.mockResolvedValue(mixed)
+      mockConfigAwareMessageResponse(mixed)
 
       const result = await translateTextForPage("test text")
 
@@ -164,7 +181,7 @@ describe("translate-text", () => {
       expect(mockDetectLanguage).toHaveBeenCalledWith(targetLanguageText, {
         enableLLM: false,
       })
-      expect(mockSendMessage).not.toHaveBeenCalled()
+      expect(getMessageCalls("enqueueTranslateRequest")).toHaveLength(0)
     })
 
     it("sends the translation request when target-language precheck is disabled", async () => {
@@ -179,7 +196,7 @@ describe("translate-text", () => {
         },
       }
       mockGetConfigFromStorage.mockResolvedValue(config)
-      mockSendMessage.mockResolvedValue("translated text")
+      mockConfigAwareMessageResponse("translated text")
 
       const targetLanguageText =
         "这是一个已经使用目标语言写成的较长段落，但关闭预检测后仍然应该发送翻译请求，同时确保文本长度超过检测阈值。"
@@ -219,7 +236,7 @@ describe("translate-text", () => {
         minLength: 10,
         enableLLM: false,
       })
-      expect(mockSendMessage).not.toHaveBeenCalled()
+      expect(getMessageCalls("enqueueTranslateRequest")).toHaveLength(0)
     })
   })
 
@@ -236,6 +253,9 @@ describe("translate-text", () => {
 
       mockGetConfigFromStorage.mockResolvedValue(llmConfig)
       mockSendMessage.mockImplementation(async (type: string) => {
+        if (type === "getInitialConfig") {
+          return await mockGetConfigFromStorage()
+        }
         if (type === "enqueueTranslateRequest") {
           return "translated page title"
         }
@@ -270,6 +290,9 @@ describe("translate-text", () => {
 
       mockGetConfigFromStorage.mockResolvedValue(llmConfig)
       mockSendMessage.mockImplementation(async (type: string) => {
+        if (type === "getInitialConfig") {
+          return await mockGetConfigFromStorage()
+        }
         if (type === "enqueueTranslateRequest") {
           return "translated page title"
         }
@@ -304,6 +327,9 @@ describe("translate-text", () => {
 
       mockGetConfigFromStorage.mockResolvedValue(llmConfig)
       mockSendMessage.mockImplementation(async (type: string) => {
+        if (type === "getInitialConfig") {
+          return await mockGetConfigFromStorage()
+        }
         if (type === "enqueueTranslateRequest") {
           return "translated body text"
         }
@@ -326,7 +352,7 @@ describe("translate-text", () => {
 
   describe("translateTextForInput", () => {
     it("skips webpage context loading for non-llm input translations", async () => {
-      mockSendMessage.mockResolvedValue("translated input")
+      mockConfigAwareMessageResponse("translated input")
 
       const result = await translateTextForInput("hello", "eng", "cmn")
 
@@ -359,6 +385,9 @@ describe("translate-text", () => {
 
       mockGetConfigFromStorage.mockResolvedValue(llmConfig)
       mockSendMessage.mockImplementation(async (type: string) => {
+        if (type === "getInitialConfig") {
+          return await mockGetConfigFromStorage()
+        }
         if (type === "enqueueTranslateRequest") {
           return "translated input"
         }

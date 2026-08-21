@@ -4,13 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { registerNodeTranslationTriggers } from "../node-translation"
 
 const mocks = vi.hoisted(() => ({
-  getLocalConfig: vi.fn<(...args: any[]) => any>(),
   removeOrShowNodeTranslation: vi.fn<(...args: any[]) => any>(),
   sendMessage: vi.fn<(...args: any[]) => any>(),
-}))
-
-vi.mock("@/utils/config/storage", () => ({
-  getLocalConfig: mocks.getLocalConfig,
 }))
 
 vi.mock("@/utils/host/translate/node-manipulation", () => ({
@@ -57,9 +52,10 @@ describe("registerNodeTranslationTriggers", () => {
   })
 
   it("requests current iframe injection after a successful top-frame node translation", async () => {
-    mocks.getLocalConfig.mockResolvedValue(createConfig())
     mocks.removeOrShowNodeTranslation.mockResolvedValue(true)
-    mocks.sendMessage.mockResolvedValue(undefined)
+    mocks.sendMessage.mockImplementation((type: string) =>
+      Promise.resolve(type === "getInitialConfig" ? createConfig() : undefined),
+    )
     teardown = registerNodeTranslationTriggers()
 
     await triggerBacktickNodeTranslation()
@@ -81,8 +77,10 @@ describe("registerNodeTranslationTriggers", () => {
   })
 
   it("does not request iframe injection when node translation finds no translatable node", async () => {
-    mocks.getLocalConfig.mockResolvedValue(createConfig())
     mocks.removeOrShowNodeTranslation.mockResolvedValue(false)
+    mocks.sendMessage.mockImplementation((type: string) =>
+      Promise.resolve(type === "getInitialConfig" ? createConfig() : undefined),
+    )
     teardown = registerNodeTranslationTriggers()
 
     await triggerBacktickNodeTranslation()
@@ -90,24 +88,35 @@ describe("registerNodeTranslationTriggers", () => {
     await vi.waitFor(() => {
       expect(mocks.removeOrShowNodeTranslation).toHaveBeenCalled()
     })
-    expect(mocks.sendMessage).not.toHaveBeenCalled()
+    expect(mocks.sendMessage).not.toHaveBeenCalledWith(
+      "injectCurrentIframesAfterTopFrameNodeTranslation",
+      undefined,
+    )
   })
 
   it("requests current iframe injection only once for repeated successful node translations", async () => {
-    mocks.getLocalConfig.mockResolvedValue(createConfig())
     mocks.removeOrShowNodeTranslation.mockResolvedValue(true)
-    mocks.sendMessage.mockResolvedValue(undefined)
+    mocks.sendMessage.mockImplementation((type: string) =>
+      Promise.resolve(type === "getInitialConfig" ? createConfig() : undefined),
+    )
     teardown = registerNodeTranslationTriggers()
 
     await triggerBacktickNodeTranslation()
     await vi.waitFor(() => {
-      expect(mocks.sendMessage).toHaveBeenCalledTimes(1)
+      expect(mocks.sendMessage).toHaveBeenCalledWith(
+        "injectCurrentIframesAfterTopFrameNodeTranslation",
+        undefined,
+      )
     })
 
     await triggerBacktickNodeTranslation()
     await vi.waitFor(() => {
       expect(mocks.removeOrShowNodeTranslation).toHaveBeenCalledTimes(2)
     })
-    expect(mocks.sendMessage).toHaveBeenCalledTimes(1)
+    expect(
+      mocks.sendMessage.mock.calls.filter(
+        ([type]) => type === "injectCurrentIframesAfterTopFrameNodeTranslation",
+      ),
+    ).toHaveLength(1)
   })
 })

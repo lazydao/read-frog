@@ -14,13 +14,13 @@ const mocks = vi.hoisted(() => ({
   aiSegmentBlock: vi.fn<(...args: any[]) => any>(),
   downloadSubtitlesAsSrt: vi.fn<(...args: any[]) => any>(),
   fetchSubtitlesSummary: vi.fn<(...args: any[]) => any>(),
-  getLocalConfig: vi.fn<(...args: any[]) => any>(),
+  sendMessage: vi.fn<(...args: any[]) => any>(),
   toastError: vi.fn<(...args: any[]) => any>(),
   translateSubtitles: vi.fn<(...args: any[]) => any>(),
 }))
 
 vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }))
-vi.mock("@/utils/config/storage", () => ({ getLocalConfig: mocks.getLocalConfig }))
+vi.mock("@/utils/message", () => ({ sendMessage: mocks.sendMessage }))
 vi.mock("@/utils/subtitles/processor/ai-segmentation", () => ({
   aiSegmentBlock: mocks.aiSegmentBlock,
 }))
@@ -96,7 +96,7 @@ describe("translatedSubtitlesDownloader", () => {
       phase: TranslatedDownloadPhase.Idle,
       progress: null,
     })
-    mocks.getLocalConfig.mockResolvedValue(createConfig())
+    mocks.sendMessage.mockResolvedValue(createConfig())
     mocks.fetchSubtitlesSummary.mockResolvedValue(null)
     mocks.translateSubtitles.mockImplementation(async (fragments: SubtitlesFragment[]) =>
       translated(fragments),
@@ -108,7 +108,7 @@ describe("translatedSubtitlesDownloader", () => {
     const fragments = lines(6)
     const { downloader } = createDownloader(fragments)
     const statuses: Array<ReturnType<typeof status>> = []
-    mocks.getLocalConfig.mockResolvedValue(config)
+    mocks.sendMessage.mockResolvedValue(config)
     const unsubscribe = subtitlesStore.sub(translatedSubtitlesDownloadStatusAtom, () =>
       statuses.push(status()),
     )
@@ -116,7 +116,8 @@ describe("translatedSubtitlesDownloader", () => {
     await downloader.download()
     unsubscribe()
 
-    expect(mocks.getLocalConfig).toHaveBeenCalledTimes(1)
+    expect(mocks.sendMessage).toHaveBeenCalledOnce()
+    expect(mocks.sendMessage).toHaveBeenCalledWith("getInitialConfig", undefined)
     expect(mocks.fetchSubtitlesSummary).toHaveBeenCalledWith(expect.any(Object), config)
     expect(mocks.translateSubtitles).toHaveBeenNthCalledWith(
       1,
@@ -256,7 +257,7 @@ describe("translatedSubtitlesDownloader", () => {
   })
 
   it("rejects same-language export before showing the preparing state", async () => {
-    mocks.getLocalConfig.mockResolvedValue(createConfig({ targetCode: "eng" }))
+    mocks.sendMessage.mockResolvedValue(createConfig({ targetCode: "eng" }))
     const statuses: Array<ReturnType<typeof status>> = []
     const unsubscribe = subtitlesStore.sub(translatedSubtitlesDownloadStatusAtom, () =>
       statuses.push(status()),
@@ -323,7 +324,7 @@ describe("translatedSubtitlesDownloader", () => {
   })
 
   it("falls back to optimized source timing when AI segmentation fails", async () => {
-    mocks.getLocalConfig.mockResolvedValue(createConfig({ aiSegmentation: true }))
+    mocks.sendMessage.mockResolvedValue(createConfig({ aiSegmentation: true }))
     mocks.aiSegmentBlock.mockRejectedValue(new Error("Segmentation failed"))
 
     await createDownloader(
@@ -357,7 +358,7 @@ describe("translatedSubtitlesDownloader", () => {
     ]
     const retryFirst = [{ ...source[0], text: "Retried first half." }]
     const retrySecond = [{ ...source[1], text: "Retried second half." }]
-    mocks.getLocalConfig.mockResolvedValue(createConfig({ aiSegmentation: true }))
+    mocks.sendMessage.mockResolvedValue(createConfig({ aiSegmentation: true }))
     mocks.aiSegmentBlock
       .mockResolvedValueOnce([{ text: "Collapsed.", start: 0, end: 1 }])
       .mockResolvedValueOnce(retryFirst)
@@ -382,7 +383,7 @@ describe("translatedSubtitlesDownloader", () => {
   it("falls back to optimized source timing when AI segmentation creates overlapping export cues", async () => {
     const questionText =
       "I was wondering whether you have tested scaling laws when source text is transformed into image inputs across many different controlled experiments."
-    mocks.getLocalConfig.mockResolvedValue(createConfig({ aiSegmentation: true }))
+    mocks.sendMessage.mockResolvedValue(createConfig({ aiSegmentation: true }))
     mocks.aiSegmentBlock.mockResolvedValue([
       { text: "Hello.", start: 0, end: 3420 },
       { text: questionText, start: 500, end: 3420 },
@@ -407,7 +408,7 @@ describe("translatedSubtitlesDownloader", () => {
   })
 
   it("falls back when optimization hides a raw collapsed AI segment", async () => {
-    mocks.getLocalConfig.mockResolvedValue(createConfig({ aiSegmentation: true }))
+    mocks.sendMessage.mockResolvedValue(createConfig({ aiSegmentation: true }))
     mocks.aiSegmentBlock.mockResolvedValue([
       { text: "Hi.", start: 500, end: 501 },
       { text: "OK.", start: 501, end: 1000 },
@@ -432,7 +433,7 @@ describe("translatedSubtitlesDownloader", () => {
   it("falls back to optimized source timing when AI segmentation collapses a cue to a boundary", async () => {
     const followUpText =
       "Actually this next cue contains enough words that it should remain separate from the short greeting during subtitle optimization across many different transcript timing examples."
-    mocks.getLocalConfig.mockResolvedValue(createConfig({ aiSegmentation: true }))
+    mocks.sendMessage.mockResolvedValue(createConfig({ aiSegmentation: true }))
     mocks.aiSegmentBlock.mockResolvedValue([
       { text: "Hi.", start: 500, end: 501 },
       { text: followUpText, start: 501, end: 3500 },

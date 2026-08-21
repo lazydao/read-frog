@@ -21,8 +21,8 @@ import {
 import { normalizePromptContextValue } from "@/utils/host/translate/translate-text"
 import { logger } from "@/utils/logger"
 import { onMessage } from "@/utils/message"
-import { getSubtitlesTranslatePrompt } from "@/utils/prompts/subtitles"
-import { getTranslatePrompt } from "@/utils/prompts/translate"
+import { getSubtitlesTranslatePromptFromConfig } from "@/utils/prompts/subtitles"
+import { getTranslatePromptFromConfig } from "@/utils/prompts/translate"
 import { BatchQueue } from "@/utils/request/batch-queue"
 import { RequestQueue } from "@/utils/request/request-queue"
 import { ensureInitializedConfig } from "./config"
@@ -31,6 +31,24 @@ import { beginTabProcessing, finishTabProcessing } from "./tab-processing-state"
 interface ProcessingTab {
   id?: number
   url?: string
+}
+
+const getBackgroundTranslatePrompt: PromptResolver<WebPagePromptContext> = async (
+  targetLang,
+  input,
+  options,
+) => {
+  const config = (await ensureInitializedConfig()) ?? DEFAULT_CONFIG
+  return getTranslatePromptFromConfig(config.translate, targetLang, input, options)
+}
+
+const getBackgroundSubtitlesPrompt: PromptResolver<SubtitlePromptContext> = async (
+  targetLang,
+  input,
+  options,
+) => {
+  const config = (await ensureInitializedConfig()) ?? DEFAULT_CONFIG
+  return getSubtitlesTranslatePromptFromConfig(config.videoSubtitles, targetLang, input, options)
 }
 
 async function withTabProcessing<T>(
@@ -289,7 +307,7 @@ export async function setUpWebPageTranslationQueue() {
   const { requestQueue, batchQueue } = await createTranslationQueues({
     requestQueueConfig,
     batchQueueConfig,
-    promptResolver: getTranslatePrompt,
+    promptResolver: getBackgroundTranslatePrompt,
   })
 
   onMessage("enqueueTranslateRequest", async (message) => {
@@ -339,7 +357,7 @@ export async function setUpWebPageTranslationQueue() {
       } else {
         // Create thunk based on type and params
         const thunk = (signal?: AbortSignal) =>
-          executeTranslate(text, langConfig, providerConfig, getTranslatePrompt, {
+          executeTranslate(text, langConfig, providerConfig, getBackgroundTranslatePrompt, {
             textFormat,
             signal,
           })
@@ -396,7 +414,7 @@ export async function setUpSubtitlesTranslationQueue() {
   const { requestQueue, batchQueue } = await createTranslationQueues({
     requestQueueConfig,
     batchQueueConfig,
-    promptResolver: getSubtitlesTranslatePrompt,
+    promptResolver: getBackgroundSubtitlesPrompt,
   })
 
   onMessage("enqueueSubtitlesTranslateRequest", async (message) => {
@@ -433,7 +451,7 @@ export async function setUpSubtitlesTranslationQueue() {
         result = await batchQueue.enqueue(data)
       } else {
         const thunk = (signal?: AbortSignal) =>
-          executeTranslate(text, langConfig, providerConfig, getSubtitlesTranslatePrompt, {
+          executeTranslate(text, langConfig, providerConfig, getBackgroundSubtitlesPrompt, {
             signal,
           })
         result = await requestQueue.enqueue(thunk, scheduleAt, hash)

@@ -1,6 +1,7 @@
 import type { TranslatePromptOptions, TranslatePromptResult } from "./translate"
+import type { Config } from "@/types/config/config"
 import type { SubtitlePromptContext } from "@/types/content"
-import { getLocalConfig } from "@/utils/config/storage"
+import { sendMessage } from "@/utils/message"
 import { DEFAULT_CONFIG } from "../constants/config"
 import {
   DEFAULT_BATCH_TRANSLATE_PROMPT,
@@ -15,13 +16,13 @@ import {
 } from "../constants/prompt"
 import { resolvePromptReplacementValue } from "./translate"
 
-export async function getSubtitlesTranslatePrompt(
+export function getSubtitlesTranslatePromptFromConfig(
+  videoSubtitlesConfig: Pick<Config["videoSubtitles"], "customPromptsConfig">,
   targetLang: string,
   input: string,
   options?: TranslatePromptOptions<SubtitlePromptContext>,
-): Promise<TranslatePromptResult> {
-  const config = (await getLocalConfig()) ?? DEFAULT_CONFIG
-  const customPromptsConfig = config.videoSubtitles.customPromptsConfig
+): TranslatePromptResult {
+  const customPromptsConfig = videoSubtitlesConfig.customPromptsConfig
   const { patterns, promptId } = customPromptsConfig
 
   // Resolve system prompt and user prompt
@@ -70,4 +71,13 @@ ${DEFAULT_BATCH_TRANSLATE_PROMPT}`
     systemPrompt: replaceTokens(systemPrompt),
     prompt: replaceTokens(prompt),
   }
+}
+
+export async function getSubtitlesTranslatePrompt(
+  targetLang: string,
+  input: string,
+  options?: TranslatePromptOptions<SubtitlePromptContext>,
+): Promise<TranslatePromptResult> {
+  const config = (await sendMessage("getInitialConfig", undefined)) ?? DEFAULT_CONFIG
+  return getSubtitlesTranslatePromptFromConfig(config.videoSubtitles, targetLang, input, options)
 }

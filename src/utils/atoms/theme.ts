@@ -1,46 +1,45 @@
 import type { ThemeMode } from "@/types/config/theme"
 import { atom } from "jotai"
-import { DEFAULT_THEME_MODE, themeModeSchema } from "@/types/config/theme"
-import { THEME_STORAGE_KEY } from "../constants/config"
+import { DEFAULT_THEME_MODE } from "@/types/config/theme"
 import { logger } from "../logger"
-import { storageAdapter } from "./storage-adapter"
+import { onMessage, sendMessage } from "../message"
 
 // Private base atom. Only export this for top-level hydration before ThemeProvider mounts.
 export const baseThemeModeAtom = atom<ThemeMode>(DEFAULT_THEME_MODE)
 
-// Public atom with read/write - write always goes through storageAdapter
+// Public atom with read/write - persistence always goes through background messaging.
 export const themeModeAtom = atom(
   (get) => get(baseThemeModeAtom),
   async (get, set, newValue: ThemeMode) => {
     const prev = get(baseThemeModeAtom)
     set(baseThemeModeAtom, newValue)
     try {
-      await storageAdapter.set(THEME_STORAGE_KEY, newValue, themeModeSchema)
+      await sendMessage("setThemeMode", newValue)
     } catch (error) {
-      console.error("Failed to set themeMode to storage:", newValue, error)
+      console.error("Failed to persist themeMode through background:", newValue, error)
       set(baseThemeModeAtom, prev)
     }
   },
 )
 
 baseThemeModeAtom.onMount = (setAtom: (newValue: ThemeMode) => void) => {
-  void storageAdapter
-    .get<ThemeMode>(THEME_STORAGE_KEY, DEFAULT_THEME_MODE, themeModeSchema)
-    .then(setAtom)
-  const unwatch = storageAdapter.watch<ThemeMode>(THEME_STORAGE_KEY, setAtom)
+  void sendMessage("getThemeMode", undefined).then((value) => setAtom(value ?? DEFAULT_THEME_MODE))
+  const removeThemeModeChangedListener = onMessage("themeModeChanged", (message) => {
+    setAtom(message.data)
+  })
 
   const handleVisibilityChange = () => {
     if (document.visibilityState === "visible") {
       logger.info("baseThemeModeAtom onMount handleVisibilityChange when: ", new Date())
-      void storageAdapter
-        .get<ThemeMode>(THEME_STORAGE_KEY, DEFAULT_THEME_MODE, themeModeSchema)
-        .then(setAtom)
+      void sendMessage("getThemeMode", undefined).then((value) =>
+        setAtom(value ?? DEFAULT_THEME_MODE),
+      )
     }
   }
   document.addEventListener("visibilitychange", handleVisibilityChange)
 
   return () => {
-    unwatch()
+    removeThemeModeChangedListener()
     document.removeEventListener("visibilitychange", handleVisibilityChange)
   }
 }

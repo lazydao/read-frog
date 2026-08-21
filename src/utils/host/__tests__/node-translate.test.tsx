@@ -35,10 +35,6 @@ vi.mock("@/utils/host/translate/translate-text", () => ({
   validateTranslationConfigAndToast: vi.fn<(...args: any[]) => any>(() => true),
 }))
 
-vi.mock("@/utils/config/storage", () => ({
-  getLocalConfig: vi.fn<(...args: any[]) => any>(),
-}))
-
 vi.mock("@/utils/config/languages", () => ({
   getDetectedCodeFromStorage: vi.fn<(...args: any[]) => any>(() => Promise.resolve("eng")),
 }))
@@ -46,11 +42,7 @@ vi.mock("@/utils/config/languages", () => ({
 describe("node translation", () => {
   const originalGetComputedStyle = window.getComputedStyle
 
-  beforeAll(async () => {
-    // Mock getLocalConfig to return TEST_CONFIG with bilingual mode
-    const { getLocalConfig } = await import("@/utils/config/storage")
-    vi.mocked(getLocalConfig).mockResolvedValue(TEST_CONFIG)
-
+  beforeAll(() => {
     window.getComputedStyle = vi.fn<(...args: any[]) => any>((element) => {
       const originalStyle = originalGetComputedStyle(element)
       if (originalStyle.float === "") {

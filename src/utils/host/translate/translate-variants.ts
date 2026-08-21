@@ -5,7 +5,7 @@ import { isLLMProviderConfig } from "@/types/config/provider"
 import { getDetectedCodeFromStorage, getFinalSourceCode } from "@/utils/config/languages"
 import { resolveProviderConfig } from "@/utils/constants/feature-providers"
 import { logger } from "@/utils/logger"
-import { getLocalConfig } from "../../config/storage"
+import { sendMessage } from "../../message"
 import { shouldSkipAsTargetLanguage } from "./target-language-skip"
 import { prepareTranslationText } from "./text-preparation"
 import {
@@ -17,7 +17,7 @@ import { getOrCreateWebPageContext } from "./webpage-context"
 import { getOrGenerateWebPageSummary } from "./webpage-summary"
 
 async function getConfigOrThrow(): Promise<Config> {
-  const config = await getLocalConfig()
+  const config = await sendMessage("getInitialConfig", undefined)
   if (!config) {
     throw new Error("No global config when translate text")
   }

@@ -7,6 +7,7 @@ import type {
 } from "@/types/background-generate-text"
 import type { Config } from "@/types/config/config"
 import type { ProviderConfig } from "@/types/config/provider"
+import type { ThemeMode } from "@/types/config/theme"
 import type {
   BatchQueueConfig,
   RequestQueueConfig,
@@ -43,6 +44,11 @@ interface ProtocolMap {
   >
   // config
   getInitialConfig: () => Config | null
+  setConfig: (data: Config) => void
+  configChanged: (data: Config) => void
+  getThemeMode: () => ThemeMode
+  setThemeMode: (data: ThemeMode) => void
+  themeModeChanged: (data: ThemeMode) => void
   // translation state
   getEnablePageTranslationByTabId: (data: { tabId: number }) => boolean | undefined
   getEnablePageTranslationFromContentScript: () => Promise<boolean>

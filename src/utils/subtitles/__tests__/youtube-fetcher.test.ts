@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest"
-import * as configStorage from "@/utils/config/storage"
 import { PLAYER_DATA_REQUEST_TYPE, PLAYER_DATA_RESPONSE_TYPE } from "@/utils/constants/subtitles"
+import * as messaging from "@/utils/message"
 import { YoutubeSubtitlesFetcher } from "../fetchers/youtube"
 
 describe("youtube subtitles fetcher", () => {
@@ -373,7 +373,7 @@ describe("youtube subtitles fetcher", () => {
   it("returns raw parser fragments for non-AI standard subtitles", async () => {
     const fetcher = new YoutubeSubtitlesFetcher()
     ;(fetcher as any).sourceLanguage = "en"
-    vi.spyOn(configStorage, "getLocalConfig").mockResolvedValue({
+    vi.spyOn(messaging, "sendMessage").mockResolvedValue({
       videoSubtitles: {
         aiSegmentation: false,
       },
@@ -397,7 +397,7 @@ describe("youtube subtitles fetcher", () => {
   it("keeps raw standard fragments when AI segmentation is enabled", async () => {
     const fetcher = new YoutubeSubtitlesFetcher()
     ;(fetcher as any).sourceLanguage = "en"
-    vi.spyOn(configStorage, "getLocalConfig").mockResolvedValue({
+    vi.spyOn(messaging, "sendMessage").mockResolvedValue({
       videoSubtitles: {
         aiSegmentation: true,
       },

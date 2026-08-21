@@ -6,7 +6,6 @@ import { franc } from "franc"
 import { toast } from "sonner"
 import { isLLMProviderConfig } from "@/types/config/provider"
 import { getProviderConfigById } from "@/utils/config/helpers"
-import { getLocalConfig } from "@/utils/config/storage"
 import { i18n } from "@/utils/i18n"
 import { logger } from "@/utils/logger"
 import { sendMessage } from "@/utils/message"
@@ -126,7 +125,7 @@ export async function detectLanguageWithLLM(
 
   if (!config) {
     try {
-      const globalConfig = await getLocalConfig()
+      const globalConfig = await sendMessage("getInitialConfig", undefined)
       if (!globalConfig) {
         logger.warn("No config found for language detection")
         return null

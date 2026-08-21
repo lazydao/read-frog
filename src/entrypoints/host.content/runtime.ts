@@ -3,6 +3,7 @@ import type { Config } from "@/types/config/config"
 import { DEFAULT_CONFIG } from "@/utils/constants/config"
 import { detectPageLanguageLightweight } from "@/utils/content/page-language"
 import { ensurePresetStyles } from "@/utils/host/translate/ui/style-injector"
+import { setUiLanguage } from "@/utils/i18n"
 import { logger } from "@/utils/logger"
 import { onMessage, sendMessage } from "@/utils/message"
 import { clearEffectiveSiteControlUrl } from "@/utils/site-control"
@@ -11,6 +12,7 @@ import { setupUrlChangeListener } from "./listen"
 import { mountHostToast } from "./mount-host-toast"
 import { bindTranslationModeShortcutKey } from "./translation-control/bind-translation-mode-shortcut"
 import { bindTranslationShortcutKey } from "./translation-control/bind-translation-shortcut"
+import { handleTranslationModeChange } from "./translation-control/handle-config-change"
 import { registerNodeTranslationTriggers } from "./translation-control/node-translation"
 import { PageTranslationManager } from "./translation-control/page-translation"
 
@@ -32,6 +34,14 @@ export async function bootstrapHostContent(
     root: null,
     rootMargin: `${preloadConfig.margin}px`,
     threshold: preloadConfig.threshold,
+  })
+  let currentConfig = initialConfig
+
+  const cleanupConfigChangedListener = onMessage("configChanged", async (msg) => {
+    const previousConfig = currentConfig
+    currentConfig = msg.data
+    await setUiLanguage(msg.data.uiLanguage)
+    handleTranslationModeChange(msg.data, previousConfig, manager)
   })
 
   const cleanupPageTranslationTriggers = manager.registerPageTranslationTriggers()
@@ -118,6 +128,7 @@ export async function bootstrapHostContent(
     cleanupPageTranslationTriggers()
     cleanupTranslationShortcut()
     cleanupTranslationModeShortcut()
+    cleanupConfigChangedListener()
     cleanupTranslationStateListener()
     cleanupFrameTranslationStateListener()
     cleanupDetectedLanguageRefreshListener()

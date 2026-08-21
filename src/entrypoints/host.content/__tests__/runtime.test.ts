@@ -6,6 +6,7 @@ import { bootstrapHostContent } from "../runtime"
 
 const {
   messageHandlers,
+  messageCleanups,
   managerInstances,
   mockBindTranslationShortcutKey,
   mockClearEffectiveSiteControlUrl,
@@ -18,6 +19,7 @@ const {
   mockSetupUrlChangeListener,
 } = vi.hoisted(() => ({
   messageHandlers: new Map<string, (msg?: any) => any>(),
+  messageCleanups: new Map<string, ReturnType<typeof vi.fn>>(),
   managerInstances: [] as Array<{
     isActive: boolean
     start: ReturnType<typeof vi.fn>
@@ -129,6 +131,7 @@ describe("bootstrapHostContent URL changes", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     messageHandlers.clear()
+    messageCleanups.clear()
     managerInstances.length = 0
 
     mockSetupUrlChangeListener.mockReturnValue(vi.fn<(...args: any[]) => any>())
@@ -137,7 +140,9 @@ describe("bootstrapHostContent URL changes", () => {
     mockBindTranslationShortcutKey.mockResolvedValue(vi.fn<(...args: any[]) => any>())
     mockOnMessage.mockImplementation((name: string, handler: (msg?: any) => any) => {
       messageHandlers.set(name, handler)
-      return vi.fn<(...args: any[]) => any>()
+      const cleanup = vi.fn<(...args: any[]) => any>()
+      messageCleanups.set(name, cleanup)
+      return cleanup
     })
     mockDetectPageLanguageLightweight.mockResolvedValue({ detectedCodeOrUnd: "fra" })
     mockSendMessage.mockImplementation((name: string) => {
@@ -177,6 +182,8 @@ describe("bootstrapHostContent URL changes", () => {
     })
 
     invalidate()
+
+    expect(messageCleanups.get("configChanged")).toHaveBeenCalledOnce()
   })
 
   it("keeps inactive page translation inactive and only asks auto-translation on SPA navigation", async () => {

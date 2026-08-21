@@ -5,7 +5,6 @@ import type { SubtitlesVideoContext } from "@/utils/subtitles/processor/translat
 import type { SubtitlesFragment } from "@/utils/subtitles/types"
 import { toast } from "sonner"
 import { getProviderConfigById } from "@/utils/config/helpers"
-import { getLocalConfig } from "@/utils/config/storage"
 import {
   MAX_GAP_MS,
   PROCESS_LOOK_AHEAD_MS,
@@ -13,6 +12,7 @@ import {
 } from "@/utils/constants/subtitles"
 import { resolveLanguageCodeFromLocale } from "@/utils/content/page-language"
 import { i18n } from "@/utils/i18n"
+import { sendMessage } from "@/utils/message"
 import { aiSegmentBlock } from "@/utils/subtitles/processor/ai-segmentation"
 import { optimizeSubtitles } from "@/utils/subtitles/processor/optimizer"
 import {
@@ -54,7 +54,7 @@ export class TranslatedSubtitlesDownloader {
     this.setStatus(TranslatedDownloadPhase.Checking, null)
 
     try {
-      const configSnapshot = await getLocalConfig()
+      const configSnapshot = await sendMessage("getInitialConfig", undefined)
       this.assertActive(operationId)
       if (!configSnapshot) {
         throw new Error(i18n.t("subtitles.errors.translatedExportFailed"))
