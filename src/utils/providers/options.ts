@@ -1,5 +1,5 @@
 import type { JSONValue } from "ai"
-import { CUSTOM_LLM_PROVIDER_TYPES, supportsTopLevelReasoning } from "@/types/config/provider"
+import { isOpenAICompatibleLLMProvider, supportsTopLevelReasoning } from "@/types/config/provider"
 import { LLM_MODEL_OPTIONS } from "../constants/models"
 
 export interface RecommendedProviderOptionsMatch {
@@ -7,14 +7,13 @@ export interface RecommendedProviderOptionsMatch {
   options: Record<string, JSONValue>
 }
 
-const OPENAI_COMPATIBLE_PROVIDER_TYPES = new Set<string>(CUSTOM_LLM_PROVIDER_TYPES)
-
 const OPENAI_COMPATIBLE_OPTION_ALIASES = {
   reasoning_effort: "reasoningEffort",
   verbosity: "textVerbosity",
 } as const satisfies Record<string, string>
 
 const REASONING_PROVIDER_OPTION_KEYS = new Set([
+  "effort",
   "enableThinking",
   "reasoningEffort",
   "reasoningHistory",
@@ -33,7 +32,7 @@ function normalizeUserProviderOptions(
   provider: string,
   userOptions: Record<string, JSONValue>,
 ): Record<string, JSONValue> {
-  if (!OPENAI_COMPATIBLE_PROVIDER_TYPES.has(provider)) {
+  if (!isOpenAICompatibleLLMProvider(provider)) {
     return userOptions
   }
 
@@ -46,7 +45,7 @@ function normalizeUserProviderOptions(
     }
 
     if (!(canonicalKey in normalizedOptions)) {
-      normalizedOptions[canonicalKey] = normalizedOptions[rawKey]
+      normalizedOptions[canonicalKey] = normalizedOptions[rawKey]!
     }
 
     delete normalizedOptions[rawKey]

@@ -1,3 +1,10 @@
+import {
+  MAX_CHARS_CJK,
+  MAX_WORDS,
+  MIN_STANDALONE_CUE_DURATION_MS,
+  PAUSE_TIMEOUT_MS,
+} from "@/utils/constants/subtitles"
+
 export const WEB_PAGE_PROMPT_TOKENS = [
   "targetLanguage",
   "input",
@@ -83,6 +90,91 @@ export const DEFAULT_SUBTITLE_TRANSLATE_PROMPT = `Translate to ${getTokenCellTex
 
 ${getTokenCellText(SUBTITLE_INPUT)}`
 
+export const PRECISION_REWRITE_TRANSLATE_SYSTEM_PROMPT = `# Role: Elite Translator and Rewriting Expert
+You are a ${getTokenCellText(TARGET_LANGUAGE)} native expert who masters the philosophy of "Translation as Rewriting." Your task is not merely to translate words, but to recreate the text in an idiomatic, fluent, and publishable form that aligns with the thought patterns and conventions of the target language.
+
+## Core Strategies
+1. **Meaning over Form**: Deeply understand the original logic. Break free from the source language's syntactic constraints. Reconstruct the content using sentence structure and word order that feel natural in ${getTokenCellText(TARGET_LANGUAGE)}.
+2. **Eradicate Translationese**: Proactively avoid overuse of passive voice, redundant conjunctions, and stacked abstract nouns. The result should read as naturally as a native composition.
+3. **Handle Terminology Precisely**: Use established, authoritative translations for academic and technical terms. If no established translation exists, retain the original term without adding an explanation. Process proper nouns according to standard, authoritative translations.
+4. **Preserve Format and Untranslatables**: Fully retain the original paragraph structure, headings, lists, placeholders, code, URLs, HTML tags, proper nouns, and other content that should not be translated. Reposition HTML tags only when needed for natural grammar, without adding, removing, or modifying them.
+
+## Output Rules
+1. **Output Translation Only**: Provide only the final translated result. Do not include introductory text, explanations, notes, or labels such as "Here is the translation."
+2. **Strict Format Correspondence**: Match the original paragraph count, list structure, placeholders, and other formatting exactly.
+3. **Use Context Silently**: Use the document metadata below only to improve contextual and terminological accuracy. Never mention it in the output.
+
+## Silent Internal Workflow
+Perform these steps internally without revealing them:
+1. Comprehend the source and produce a fluent internal draft.
+2. Silently review that draft for mistranslations, omissions, translationese, formatting errors, and inaccurate terminology.
+3. Correct every issue and output only the polished final translation.
+
+Never output analysis, reasoning, drafts, diagnoses, issue lists, or commentary. Output only the final translation.
+
+## Document Metadata for Context Awareness
+Webpage title: ${getTokenCellText(WEB_TITLE)}
+Webpage summary: ${getTokenCellText(WEB_SUMMARY)}`
+
+export const PRECISION_REWRITE_TRANSLATE_PROMPT = `Translate to ${getTokenCellText(TARGET_LANGUAGE)}:
+
+
+${getTokenCellText(INPUT)}`
+
+/**
+ * Stable persisted ids for code-owned translation prompts. `default` describes
+ * product behavior, not an experiment cohort: it is a real stored selection for
+ * both page and subtitle translation.
+ */
+export const DEFAULT_TRANSLATE_PROMPT_ID = "default"
+export const PRECISION_REWRITE_TRANSLATE_PROMPT_ID = "precision-rewrite"
+
+export const BUILT_IN_PAGE_TRANSLATE_PROMPTS = {
+  [DEFAULT_TRANSLATE_PROMPT_ID]: {
+    id: DEFAULT_TRANSLATE_PROMPT_ID,
+    systemPrompt: DEFAULT_TRANSLATE_SYSTEM_PROMPT,
+    prompt: DEFAULT_TRANSLATE_PROMPT,
+  },
+  [PRECISION_REWRITE_TRANSLATE_PROMPT_ID]: {
+    id: PRECISION_REWRITE_TRANSLATE_PROMPT_ID,
+    systemPrompt: PRECISION_REWRITE_TRANSLATE_SYSTEM_PROMPT,
+    prompt: PRECISION_REWRITE_TRANSLATE_PROMPT,
+  },
+} as const
+
+export const BUILT_IN_SUBTITLE_TRANSLATE_PROMPTS = {
+  [DEFAULT_TRANSLATE_PROMPT_ID]: {
+    id: DEFAULT_TRANSLATE_PROMPT_ID,
+    systemPrompt: DEFAULT_SUBTITLE_TRANSLATE_SYSTEM_PROMPT,
+    prompt: DEFAULT_SUBTITLE_TRANSLATE_PROMPT,
+  },
+} as const
+
+export const BUILT_IN_PAGE_TRANSLATE_PROMPT_IDS = Object.keys(
+  BUILT_IN_PAGE_TRANSLATE_PROMPTS,
+) as Array<keyof typeof BUILT_IN_PAGE_TRANSLATE_PROMPTS>
+
+export const BUILT_IN_SUBTITLE_TRANSLATE_PROMPT_IDS = Object.keys(
+  BUILT_IN_SUBTITLE_TRANSLATE_PROMPTS,
+) as Array<keyof typeof BUILT_IN_SUBTITLE_TRANSLATE_PROMPTS>
+
+export const DEFAULT_TRANSLATE_PROMPTS_CONFIG = {
+  promptId: DEFAULT_TRANSLATE_PROMPT_ID,
+  patterns: [],
+}
+
+export const DEFAULT_SUBTITLE_TRANSLATE_PROMPTS_CONFIG = {
+  promptId: DEFAULT_TRANSLATE_PROMPT_ID,
+  patterns: [],
+}
+
+/**
+ * Shared by the webpage and subtitles batch pipelines. The worked example below
+ * must keep a real translation in every output slot: demonstrating
+ * NO_TRANSLATION_SENTINEL in one of them taught models a ~1-in-3 base rate for
+ * the marker and silently dropped paragraphs that needed translating. See
+ * DEFAULT_SENTINEL_TRANSLATE_PROMPT for the measurements.
+ */
 export const DEFAULT_BATCH_TRANSLATE_PROMPT = `## Multi-paragraph Translation Rules
 1. If input contains a standalone line containing only ${BATCH_SEPARATOR}, use a standalone ${BATCH_SEPARATOR} line in your output. If input has no standalone ${BATCH_SEPARATOR} line, don't use ${BATCH_SEPARATOR} in your output.
 2. **CRITICAL**: Treat ${BATCH_SEPARATOR} as a separator only when it appears on its own line. Do not treat ${BATCH_SEPARATOR} as a separator when it appears inside normal text, code, quotes, or punctuation.
@@ -122,44 +214,22 @@ Single paragraph content
 Direct translation without separators
 `
 
+/**
+ * Safety-first marker rule selected from the September 2026 target-language
+ * benchmark: 12 prompt variants, six strong/weak Atlas models, 416 tasks, and
+ * Simplified Chinese/English/Japanese targets. Compared with the previous
+ * every-word rule, this wording distinguishes preserved tokens (brand names,
+ * handles, URLs, numbers, code) from foreign-language prose while producing the
+ * fewest hidden owed translations among the Chinese finalists.
+ *
+ * Keep the rule parameterized: the user selected it for every target language.
+ * It remains a probabilistic fallback, not the primary language detector. In
+ * particular, keep BatchQueue's count validation and individual fallback: they
+ * reject a multi-item batch that collapses to one marker instead of accepting
+ * it as a verdict for every item.
+ */
 export const DEFAULT_SENTINEL_TRANSLATE_PROMPT = `## Already-translated Input Rule
-If a paragraph of the input is already entirely written in ${getTokenCellText(TARGET_LANGUAGE)} and needs no translation, output the exact marker ${NO_TRANSLATION_SENTINEL} as that paragraph's entire translation instead of repeating the paragraph. Never mix the marker with translated text. If only part of a paragraph is in ${getTokenCellText(TARGET_LANGUAGE)}, translate the whole paragraph normally.`
-
-/**
- * Batch prompt for the WEBPAGE pipeline only: the format example demonstrates
- * the no-translation marker in place, which measurably doubles marker usage on
- * mixed batches versus the rule alone (models imitate examples more reliably
- * than they follow rules). Subtitles keep DEFAULT_BATCH_TRANSLATE_PROMPT —
- * their pipeline has no sentinel mapping and must never see the marker.
- * Derived via replace; the prompt unit tests pin that both anchors matched.
- */
-export const DEFAULT_BATCH_TRANSLATE_PROMPT_WITH_SENTINEL = DEFAULT_BATCH_TRANSLATE_PROMPT.replace(
-  `Paragraph B
-
-${BATCH_SEPARATOR}`,
-  `Paragraph B (this one is already written in ${getTokenCellText(TARGET_LANGUAGE)})
-
-${BATCH_SEPARATOR}`,
-).replace(
-  `Translation B
-
-${BATCH_SEPARATOR}`,
-  `${NO_TRANSLATION_SENTINEL}
-
-${BATCH_SEPARATOR}`,
-)
-
-/**
- * UI sentinel value for default prompt selection
- * NOTE: This is NOT stored in config - it's only used in UI components
- * Config stores `null` for default, this string is just for Select/UI compatibility
- */
-export const DEFAULT_TRANSLATE_PROMPT_ID = "__default__"
-
-export const DEFAULT_TRANSLATE_PROMPTS_CONFIG = {
-  promptId: null,
-  patterns: [],
-}
+Output only ${NO_TRANSLATION_SENTINEL} when only non-translatable names, brands, handles, URLs, numbers, or code differ from ${getTokenCellText(TARGET_LANGUAGE)}. A foreign-language phrase or clause must be translated.`
 
 // === Subtitles Segmentation Prompts ===
 
@@ -183,13 +253,19 @@ Hello world.
 2000 --> 3500
 This is a sentence.
 
-## Rules
-1. **Complete sentences only** - Each cue must be a COMPLETE, standalone sentence that expresses a full thought.
-2. **Never split at incomplete clauses** - A clause that cannot stand alone as a complete thought MUST be merged with the clause it depends on. Signs of incomplete clauses:
-   - Sets up a condition, time, or reason but doesn't state the result/consequence
-   - Ends with a conjunction or leaves an expectation unfulfilled
-   - Would sound unfinished if spoken alone
-   Example: "When Moses left Egypt" is INCOMPLETE - it sets up a time but doesn't say what happened.
+## Rules (in priority order — an earlier rule always wins over a later one)
+1. **Length limit** - A cue may hold at most ${MAX_WORDS} words, or at most ${MAX_CHARS_CJK} characters for Chinese, Japanese, Korean and other languages written without spaces. This limit beats every rule below it:
+   - Never merge fragments into a cue that would exceed the limit, even if that leaves a clause incomplete.
+   - If one complete sentence exceeds the limit, split it at the most natural clause boundary (a comma, a conjunction, a pause) so both halves stay as balanced as possible.
+   - If a single input fragment already exceeds the limit on its own, output it unchanged as its own cue with its own "s" and "e". Do not attach any other fragment to it — you cannot split inside a fragment because it has no inner timestamps.
+   - A silence is a hard boundary: when the gap between one fragment's "e" and the next fragment's "s" is longer than ${PAUSE_TIMEOUT_MS} ms, never put those two fragments in the same cue — a cue that spans the silence keeps its text on screen while nobody is speaking. This holds for every rule on this list, including the brief-cue exception below, and even when the fragment after the silence repeats the text before it: a line repeated after a pause is a second cue, not a duplicate to collapse.
+   - Exception for brief cues: a cue that would last less than ${MIN_STANDALONE_CUE_DURATION_MS} ms ("e" of its last fragment minus "s" of its first) must never stand alone — a viewer cannot read a cue that brief. Merge it into the neighbouring cue it belongs to grammatically, even if the merged cue then exceeds the length limit, and even if that neighbour is an over-long fragment, but only across a gap of at most ${PAUSE_TIMEOUT_MS} ms; if both neighbours are further away than that, the brief cue stays alone. When either side would work, pick the side that keeps the merged cue within the limit.
+2. **Complete sentences** - Within the length limit, each cue should be a complete, standalone sentence that expresses a full thought.
+   - A clause that cannot stand alone as a complete thought should be merged with the clause it depends on, as long as the merged cue stays within the limit. Signs of incomplete clauses:
+     - Sets up a condition, time, or reason but doesn't state the result/consequence
+     - Ends with a conjunction or leaves an expectation unfulfilled
+     - Would sound unfinished if spoken alone
+   Example: "When Moses left Egypt" is INCOMPLETE - it sets up a time but doesn't say what happened, so merge it with what follows if the result fits the limit.
 3. **Timestamp extraction algorithm** - For EACH sentence:
    - Find the FIRST word of the sentence in the input array → use its "s" value as START time
    - Find the LAST word of the sentence in the input array → use its "e" value as END time
@@ -221,7 +297,33 @@ I thought the story was about him.
 
 Explanation:
 - "Moses had died" → first word "Moses" has s:134200, last word "died" has e:136160 → 134200 --> 136160
-- "I thought the story was about him" → first word "I" has s:136160, last word "him" has e:138160 → 136160 --> 138160`
+- "I thought the story was about him" → first word "I" has s:136160, last word "him" has e:138160 → 136160 --> 138160
+
+## Critical Example: Length Beats Completeness, Brief Cues Still Join
+
+Input (Japanese, limit ${MAX_CHARS_CJK} characters; the first and third fragments already exceed it on their own at 33 characters each, the second lasts 200 ms, far under the ${MIN_STANDALONE_CUE_DURATION_MS} ms minimum):
+[{"s":332039,"e":335039,"t":"前回の発行よりなんなら余裕悪くね?どう?今回ちょっとイン価がレベル"},{"s":356720,"e":356920,"t":"2"},{"s":356920,"e":359919,"t":"やからね。もしかしたらその価ダメージがめちゃめちゃ強いかもしらん。"}]
+
+WRONG (everything merged because "レベル" and "2" are incomplete — the cue is now 67 characters):
+332039 --> 359919
+前回の発行よりなんなら余裕悪くね?どう?今回ちょっとイン価がレベル2やからね。もしかしたらその価ダメージがめちゃめちゃ強いかもしらん。
+
+WRONG (the 200 ms fragment "2" left alone as a cue that flashes on screen):
+356720 --> 356920
+2
+
+CORRECT (the first over-long fragment stays unchanged; the brief "2" joins the next cue even though that cue is over the limit):
+332039 --> 335039
+前回の発行よりなんなら余裕悪くね?どう?今回ちょっとイン価がレベル
+
+356720 --> 359919
+2やからね。もしかしたらその価ダメージがめちゃめちゃ強いかもしらん。
+
+## Final check before you answer
+- No cue is longer than ${MAX_WORDS} words or ${MAX_CHARS_CJK} characters, except a single input fragment that was already over the limit, or a cue that had to absorb a fragment shorter than ${MIN_STANDALONE_CUE_DURATION_MS} ms.
+- No cue lasts less than ${MIN_STANDALONE_CUE_DURATION_MS} ms, unless a silence longer than ${PAUSE_TIMEOUT_MS} ms on both sides left it alone.
+- No cue spans a silence longer than ${PAUSE_TIMEOUT_MS} ms between two of its fragments.
+- Every start time is the "s" of that cue's first fragment and every end time is the "e" of its last fragment. Never use the next cue's start as an end time.`
 
 export const DEFAULT_SUBTITLES_SEGMENTATION_PROMPT = `Re-segment these subtitles:
 

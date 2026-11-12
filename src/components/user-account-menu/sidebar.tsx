@@ -11,9 +11,9 @@ import { i18n } from "@/utils/i18n"
 import {
   ACCOUNT_STATE,
   AccountAvatar,
+  AccountNameWithPlan,
   LogoutMenuItem,
   WebAppMenuItem,
-  openLogIn,
   useUserAccountMenu,
 } from "./shared"
 
@@ -51,9 +51,10 @@ export function UserAccountMenuSidebar() {
       <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton
+            ref={account.logInAnchorRef}
             size="lg"
             tooltip={i18n.t("account.login")}
-            onClick={openLogIn}
+            onClick={account.logIn}
             className="cursor-pointer"
           >
             {avatar}
@@ -76,8 +77,8 @@ export function UserAccountMenuSidebar() {
               }
             >
               {avatar}
-              <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-medium">{displayName}</span>
+              <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                <AccountNameWithPlan account={account} />
                 {account.user?.email && (
                   <span className="truncate text-xs text-muted-foreground">
                     {account.user.email}

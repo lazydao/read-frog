@@ -1,6 +1,51 @@
 import type { SiteRule } from "@/types/config/site-rules"
+import { DEFAULT_TAG_SETS } from "@/utils/constants/dom-rules"
 import { logger } from "@/utils/logger"
-import { urlMatchesRule } from "./match"
+import { urlMatchesPattern } from "@/utils/url-pattern"
+
+/**
+ * Whether one rule claims `url`: any of its `matches` hits, and none of its
+ * `excludeMatches` does.
+ *
+ * Lives here rather than beside the pattern engine because it is the only thing
+ * in the codebase that knows what a `SiteRule` is, and `resolveSiteRule` below
+ * is its only caller.
+ */
+export function urlMatchesRule(
+  url: string,
+  rule: Pick<SiteRule, "matches" | "excludeMatches">,
+): boolean {
+  const matches = Array.isArray(rule.matches) ? rule.matches : [rule.matches]
+  if (!matches.some((pattern) => urlMatchesPattern(url, pattern))) {
+    return false
+  }
+  return !(rule.excludeMatches ?? []).some((pattern) => urlMatchesPattern(url, pattern))
+}
+
+/** "Text/Markdown; charset=utf-8" → "text/markdown". */
+function bareMimeType(contentType: string): string {
+  return contentType.split(";", 1)[0]!.trim().toLowerCase()
+}
+
+/**
+ * Whether one rule's `contentTypes` admits a document of `contentType`. A rule
+ * without the field admits every document. One with it never matches when the
+ * type is unknown: background callers resolving a tab or frame URL have no
+ * document to read it from.
+ */
+export function contentTypeMatchesRule(
+  contentType: string | undefined,
+  rule: Pick<SiteRule, "contentTypes">,
+): boolean {
+  if (rule.contentTypes === undefined) {
+    return true
+  }
+  if (contentType === undefined) {
+    return false
+  }
+  const documentType = bareMimeType(contentType)
+  return rule.contentTypes.some((type) => bareMimeType(type) === documentType)
+}
 
 /**
  * The merged outcome of every site rule matching one URL. Selector lists are
@@ -11,11 +56,35 @@ export interface ResolvedSiteRule {
   matchedRuleIds: string[]
   excludeSelector: string | null
   includeSelector: string | null
-  forceBlockSelector: string | null
-  forceInlineSelector: string | null
+  forceBlockNodeSelector: string | null
+  forceBlockStyleSelector: string | null
+  forceInlineNodeSelector: string | null
+  forceInlineStyleSelector: string | null
+  /**
+   * Also contains every atom selector: atoms must stop the walk exactly like
+   * preserve-text elements, and folding them in here keeps the hot-path
+   * predicate at a single `matches()` call.
+   */
   preserveTextSelector: string | null
+  /** Inline atoms only (formula renderers); consumed by bilingual extraction. */
+  atomSelector: string | null
+  /** Hidden regions the walk enters anyway; see `walkHiddenSelectors` in the schema. */
+  walkHiddenSelector: string | null
+  /**
+   * Tag-set families: `null` means no matched rule touched the family, so
+   * consumers fall back to the shipped constant Set (hot path unchanged).
+   * Non-null is the fully materialized effective set — defaults seeded in
+   * code, rule `.add`/`.remove` deltas applied.
+   */
+  dontWalkTags: ReadonlySet<string> | null
+  dontWalkButTranslateTags: ReadonlySet<string> | null
+  mainContentIgnoreTags: ReadonlySet<string> | null
+  forceBlockTags: ReadonlySet<string> | null
+  forceInlineTranslationTags: ReadonlySet<string> | null
   minCharacters: number | null
   minWords: number | null
+  injectIntoIframes: boolean | null
+  reflowLatexmlTextBoxes: boolean | null
   injectedCss: string | null
 }
 
@@ -23,13 +92,40 @@ export const EMPTY_RESOLVED_SITE_RULE: ResolvedSiteRule = {
   matchedRuleIds: [],
   excludeSelector: null,
   includeSelector: null,
-  forceBlockSelector: null,
-  forceInlineSelector: null,
+  forceBlockNodeSelector: null,
+  forceBlockStyleSelector: null,
+  forceInlineNodeSelector: null,
+  forceInlineStyleSelector: null,
   preserveTextSelector: null,
+  atomSelector: null,
+  walkHiddenSelector: null,
+  dontWalkTags: null,
+  dontWalkButTranslateTags: null,
+  mainContentIgnoreTags: null,
+  forceBlockTags: null,
+  forceInlineTranslationTags: null,
   minCharacters: null,
   minWords: null,
+  injectIntoIframes: null,
+  reflowLatexmlTextBoxes: null,
   injectedCss: null,
 }
+
+/**
+ * Tags whose removal from `dontWalkTags` would be catastrophic (script/style
+ * text injected into translations, head metadata walked). Removal attempts are
+ * skipped with a warning. PRE is deliberately absent — un-blocking it is a
+ * legitimate per-site choice.
+ */
+export const PROTECTED_DONT_WALK_TAGS: ReadonlySet<string> = new Set([
+  "HEAD",
+  "TITLE",
+  "META",
+  "SCRIPT",
+  "NOSCRIPT",
+  "STYLE",
+  "LINK",
+])
 
 const selectorValidity = new Map<string, boolean>()
 
@@ -68,12 +164,12 @@ function joinSelectors(selectors: Iterable<string>): string | null {
   return merged.size > 0 ? [...merged].join(",") : null
 }
 
-function mergeSelectorDelta(
+function mergeSelectorDeltaSet(
   matched: SiteRule[],
   baseKey: keyof SiteRule,
   addKey: keyof SiteRule,
   removeKey: keyof SiteRule,
-): string | null {
+): Set<string> {
   const merged = new Set<string>()
 
   const addSelectors = (selectors: unknown) => {
@@ -100,14 +196,92 @@ function mergeSelectorDelta(
     removeSelectors(rule[removeKey])
   }
 
-  return joinSelectors(merged)
+  return merged
+}
+
+function mergeSelectorDelta(
+  matched: SiteRule[],
+  baseKey: keyof SiteRule,
+  addKey: keyof SiteRule,
+  removeKey: keyof SiteRule,
+): string | null {
+  return joinSelectors(mergeSelectorDeltaSet(matched, baseKey, addKey, removeKey))
+}
+
+const TAG_NAME_RE = /^[a-z][a-z0-9-]*$/i
+
+/**
+ * Tag-set families are seeded from the shipped default Set and patched with
+ * `.add`/`.remove` tag-name entries. Not routed through `mergeSelectorDelta`:
+ * its `querySelector` probe would happily accept class/descendant selectors
+ * that a `Set.has(tagName)` consumer can never match, silencing the mistake.
+ * Returns `null` when no matched rule references the family, so hot-path
+ * consumers keep using the constant Set untouched.
+ *
+ * Case handling: `tagName` is uppercase for HTML elements but case-preserving
+ * for SVG/MathML (e.g. "svg", "foreignObject"), so adds insert the raw,
+ * uppercase, and lowercase forms while removes delete all three. camelCase
+ * foreign tags therefore need the same casing in `.add` and `.remove`.
+ *
+ * Deltas apply in rule order, so for any one tag the last rule naming it
+ * decides. That is the whole override story: the built-in rule that un-blocks
+ * PRE in plain-text documents sits ahead of every site rule, and user rules
+ * come after all built-in ones, so either can put PRE back.
+ */
+function mergeTagSetDelta(
+  matched: SiteRule[],
+  addKey: keyof SiteRule,
+  removeKey: keyof SiteRule,
+  defaults: ReadonlySet<string>,
+  protectedTags?: ReadonlySet<string>,
+): ReadonlySet<string> | null {
+  if (!matched.some((rule) => rule[addKey] !== undefined || rule[removeKey] !== undefined)) {
+    return null
+  }
+
+  const merged = new Set(defaults)
+
+  const validTagNames = (entries: unknown): string[] => {
+    const tagNames: string[] = []
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      const trimmed = typeof entry === "string" ? entry.trim() : ""
+      if (TAG_NAME_RE.test(trimmed)) {
+        tagNames.push(trimmed)
+      } else {
+        logger.warn(`[site-rules] Invalid tag name dropped: "${String(entry)}"`)
+      }
+    }
+    return tagNames
+  }
+
+  for (const rule of matched) {
+    for (const tagName of validTagNames(rule[addKey])) {
+      merged.add(tagName)
+      merged.add(tagName.toUpperCase())
+      merged.add(tagName.toLowerCase())
+    }
+    for (const tagName of validTagNames(rule[removeKey])) {
+      if (protectedTags?.has(tagName.toUpperCase())) {
+        logger.warn(`[site-rules] Protected tag cannot be removed: "${tagName}"`)
+        continue
+      }
+      merged.delete(tagName)
+      merged.delete(tagName.toUpperCase())
+      merged.delete(tagName.toLowerCase())
+    }
+  }
+
+  return merged
 }
 
 /**
- * Merge all rules matching `url` into one effective rule.
+ * Merge all rules matching `url` into one effective rule. `contentType` is the
+ * document's MIME type when the caller has the document at hand; a rule that
+ * declares `contentTypes` matches only documents of those types.
  *
  * Ordering: built-in rules (array order) first, then user rules (array order).
  * - Selector arrays are unioned across all matching rules.
+ * - Tag-set deltas apply in order: for one tag, the last rule naming it decides.
  * - `injectedCss` is concatenated (later rules append; disabling the built-in
  *   rule is the way to replace its CSS entirely).
  * - Remaining scalars are last-wins, so user rules override built-in ones.
@@ -117,6 +291,7 @@ export function resolveSiteRule(
   builtInRules: SiteRule[],
   userRules: SiteRule[],
   disabledBuiltInRuleIds: string[],
+  contentType?: string,
 ): ResolvedSiteRule {
   const disabled = new Set(disabledBuiltInRuleIds)
   const candidates = [
@@ -124,13 +299,17 @@ export function resolveSiteRule(
     ...userRules.filter((rule) => rule.enabled !== false),
   ]
 
-  const matched = candidates.filter((rule) => urlMatchesRule(url, rule))
+  const matched = candidates.filter(
+    (rule) => urlMatchesRule(url, rule) && contentTypeMatchesRule(contentType, rule),
+  )
   if (matched.length === 0) {
     return EMPTY_RESOLVED_SITE_RULE
   }
 
   let minCharacters: number | null = null
   let minWords: number | null = null
+  let injectIntoIframes: boolean | null = null
+  let reflowLatexmlTextBoxes: boolean | null = null
   const cssParts: string[] = []
   for (const rule of matched) {
     if (rule.minCharacters !== undefined) {
@@ -139,6 +318,12 @@ export function resolveSiteRule(
     if (rule.minWords !== undefined) {
       minWords = rule.minWords
     }
+    if (rule.injectIntoIframes !== undefined) {
+      injectIntoIframes = rule.injectIntoIframes
+    }
+    if (rule.reflowLatexmlTextBoxes !== undefined) {
+      reflowLatexmlTextBoxes = rule.reflowLatexmlTextBoxes
+    }
     const injectedCssParts = [rule.injectedCss, ...(rule["injectedCss.add"] ?? [])]
     for (const css of injectedCssParts) {
       if (css?.trim()) {
@@ -146,6 +331,19 @@ export function resolveSiteRule(
       }
     }
   }
+
+  const preserveTextSelectors = mergeSelectorDeltaSet(
+    matched,
+    "preserveTextSelectors",
+    "preserveTextSelectors.add",
+    "preserveTextSelectors.remove",
+  )
+  const atomSelectors = mergeSelectorDeltaSet(
+    matched,
+    "atomSelectors",
+    "atomSelectors.add",
+    "atomSelectors.remove",
+  )
 
   return {
     matchedRuleIds: matched.map((rule) => rule.id),
@@ -161,26 +359,73 @@ export function resolveSiteRule(
       "includeSelectors.add",
       "includeSelectors.remove",
     ),
-    forceBlockSelector: mergeSelectorDelta(
+    forceBlockNodeSelector: mergeSelectorDelta(
       matched,
-      "forceBlockSelectors",
-      "forceBlockSelectors.add",
-      "forceBlockSelectors.remove",
+      "forceBlockNodeSelectors",
+      "forceBlockNodeSelectors.add",
+      "forceBlockNodeSelectors.remove",
     ),
-    forceInlineSelector: mergeSelectorDelta(
+    forceBlockStyleSelector: mergeSelectorDelta(
       matched,
-      "forceInlineSelectors",
-      "forceInlineSelectors.add",
-      "forceInlineSelectors.remove",
+      "forceBlockStyleSelectors",
+      "forceBlockStyleSelectors.add",
+      "forceBlockStyleSelectors.remove",
     ),
-    preserveTextSelector: mergeSelectorDelta(
+    forceInlineNodeSelector: mergeSelectorDelta(
       matched,
-      "preserveTextSelectors",
-      "preserveTextSelectors.add",
-      "preserveTextSelectors.remove",
+      "forceInlineNodeSelectors",
+      "forceInlineNodeSelectors.add",
+      "forceInlineNodeSelectors.remove",
+    ),
+    forceInlineStyleSelector: mergeSelectorDelta(
+      matched,
+      "forceInlineStyleSelectors",
+      "forceInlineStyleSelectors.add",
+      "forceInlineStyleSelectors.remove",
+    ),
+    preserveTextSelector: joinSelectors([...preserveTextSelectors, ...atomSelectors]),
+    atomSelector: joinSelectors(atomSelectors),
+    walkHiddenSelector: mergeSelectorDelta(
+      matched,
+      "walkHiddenSelectors",
+      "walkHiddenSelectors.add",
+      "walkHiddenSelectors.remove",
+    ),
+    dontWalkTags: mergeTagSetDelta(
+      matched,
+      "dontWalkTags.add",
+      "dontWalkTags.remove",
+      DEFAULT_TAG_SETS.dontWalkTags,
+      PROTECTED_DONT_WALK_TAGS,
+    ),
+    dontWalkButTranslateTags: mergeTagSetDelta(
+      matched,
+      "dontWalkButTranslateTags.add",
+      "dontWalkButTranslateTags.remove",
+      DEFAULT_TAG_SETS.dontWalkButTranslateTags,
+    ),
+    mainContentIgnoreTags: mergeTagSetDelta(
+      matched,
+      "mainContentIgnoreTags.add",
+      "mainContentIgnoreTags.remove",
+      DEFAULT_TAG_SETS.mainContentIgnoreTags,
+    ),
+    forceBlockTags: mergeTagSetDelta(
+      matched,
+      "forceBlockTags.add",
+      "forceBlockTags.remove",
+      DEFAULT_TAG_SETS.forceBlockTags,
+    ),
+    forceInlineTranslationTags: mergeTagSetDelta(
+      matched,
+      "forceInlineTranslationTags.add",
+      "forceInlineTranslationTags.remove",
+      DEFAULT_TAG_SETS.forceInlineTranslationTags,
     ),
     minCharacters,
     minWords,
+    injectIntoIframes,
+    reflowLatexmlTextBoxes,
     injectedCss: cssParts.length > 0 ? cssParts.join("\n") : null,
   }
 }

@@ -3,10 +3,15 @@ import type { ConfigMeta, ConfigValueAndMeta } from "@/types/config/meta"
 import { storage } from "#imports"
 import { configSchema } from "@/types/config/config"
 import { CONFIG_SCHEMA_VERSION, CONFIG_STORAGE_KEY, DEFAULT_CONFIG } from "../constants/config"
+import { isContentScriptContext } from "../content-script-context"
 import { logger } from "../logger"
+import { sendMessage } from "../message"
 
 export async function getLocalConfig() {
-  const config = await storage.getItem<Config>(`local:${CONFIG_STORAGE_KEY}`)
+  // Content scripts ask the background, which owns the configuration.
+  const config = isContentScriptContext()
+    ? await sendMessage("getInitialConfig", undefined)
+    : await storage.getItem<Config>(`local:${CONFIG_STORAGE_KEY}`)
   if (!config) {
     logger.warn("No config found in storage")
     return null
@@ -23,6 +28,10 @@ export async function setLocalConfig(config: Config) {
   const parsedConfig = configSchema.safeParse(config)
   if (!parsedConfig.success) {
     throw new Error("Config is invalid")
+  }
+  if (isContentScriptContext()) {
+    await sendMessage("setConfig", parsedConfig.data)
+    return
   }
   await storage.setItem<Config>(`local:${CONFIG_STORAGE_KEY}`, parsedConfig.data)
   await storage.setMeta<Partial<ConfigMeta>>(`local:${CONFIG_STORAGE_KEY}`, {
@@ -64,6 +73,10 @@ export async function setLocalConfigAndMeta(config: Config, meta: Partial<Config
   const parsedConfig = configSchema.safeParse(config)
   if (!parsedConfig.success) {
     throw new Error("Config is invalid")
+  }
+  if (isContentScriptContext()) {
+    await sendMessage("setConfig", parsedConfig.data)
+    return
   }
   await storage.setItem<Config>(`local:${CONFIG_STORAGE_KEY}`, parsedConfig.data)
   await storage.setMeta<Partial<ConfigMeta>>(`local:${CONFIG_STORAGE_KEY}`, {

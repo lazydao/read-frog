@@ -1,17 +1,18 @@
 import type { Config } from "@/types/config/config"
 import type { ProviderConfig } from "@/types/config/provider"
-import { isTranslateProvider } from "@/types/config/provider"
+import { isLLMProvider, isTranslateProvider } from "@/types/config/provider"
 import { mergeWithArrayOverwrite } from "../atoms/config"
 import { getProviderConfigById } from "../config/helpers"
 
 export const FEATURE_KEYS = [
-  "translate",
+  "pageTranslation",
   "videoSubtitles",
-  "selectionToolbar.translate",
+  "selectionTranslation",
   "inputTranslation",
+  "noteSuggestion",
 ] as const
 
-export const CORE_FEATURE_KEYS = ["translate", "videoSubtitles"] as const
+export const CORE_FEATURE_KEYS = ["pageTranslation", "videoSubtitles"] as const
 
 export type FeatureKey = (typeof FEATURE_KEYS)[number]
 
@@ -22,17 +23,17 @@ export interface FeatureProviderDef {
 }
 
 export const FEATURE_PROVIDER_DEFS = {
-  translate: {
+  pageTranslation: {
     isProvider: isTranslateProvider,
-    getProviderId: (c: Config) => c.translate.providerId,
-    configPath: ["translate", "providerId"],
+    getProviderId: (c: Config) => c.pageTranslation.providerId,
+    configPath: ["pageTranslation", "providerId"],
   },
   videoSubtitles: {
     isProvider: isTranslateProvider,
     getProviderId: (c: Config) => c.videoSubtitles.providerId,
     configPath: ["videoSubtitles", "providerId"],
   },
-  "selectionToolbar.translate": {
+  selectionTranslation: {
     isProvider: isTranslateProvider,
     getProviderId: (c: Config) => c.selectionToolbar.features.translate.providerId,
     configPath: ["selectionToolbar", "features", "translate", "providerId"],
@@ -42,21 +43,34 @@ export const FEATURE_PROVIDER_DEFS = {
     getProviderId: (c: Config) => c.inputTranslation.providerId,
     configPath: ["inputTranslation", "providerId"],
   },
+  noteSuggestion: {
+    isProvider: isLLMProvider,
+    getProviderId: (c: Config) => c.selectionToolbar.noteSuggestion.providerId,
+    configPath: ["selectionToolbar", "noteSuggestion", "providerId"],
+  },
 } as const satisfies Record<FeatureKey, FeatureProviderDef>
 
-/** Maps FeatureKey (with dots) to i18n-safe key (with underscores) for `options.general.featureProviders.features.*` */
+/** Maps FeatureKey (with dots) to i18n-safe key (with underscores) for `options.apiProviders.featureProviders.features.*` */
 export const FEATURE_KEY_I18N_MAP = {
-  translate: "translate",
+  pageTranslation: "pageTranslation",
   videoSubtitles: "videoSubtitles",
-  "selectionToolbar.translate": "selectionToolbar_translate",
+  selectionTranslation: "selectionTranslation",
   inputTranslation: "inputTranslation",
+  noteSuggestion: "noteSuggestion",
 } as const satisfies Record<FeatureKey, string>
 
 export type FeatureLabelI18nKey =
-  `options.general.featureProviders.features.${(typeof FEATURE_KEY_I18N_MAP)[FeatureKey]}`
+  `options.apiProviders.featureProviders.features.${(typeof FEATURE_KEY_I18N_MAP)[FeatureKey]}`
 
 export function getFeatureLabelI18nKey(featureKey: FeatureKey): FeatureLabelI18nKey {
-  return `options.general.featureProviders.features.${FEATURE_KEY_I18N_MAP[featureKey]}`
+  return `options.apiProviders.featureProviders.features.${FEATURE_KEY_I18N_MAP[featureKey]}`
+}
+
+export type FeatureDescriptionI18nKey =
+  `options.apiProviders.featureProviders.descriptions.${(typeof FEATURE_KEY_I18N_MAP)[FeatureKey]}`
+
+export function getFeatureDescriptionI18nKey(featureKey: FeatureKey): FeatureDescriptionI18nKey {
+  return `options.apiProviders.featureProviders.descriptions.${FEATURE_KEY_I18N_MAP[featureKey]}`
 }
 
 export function resolveProviderConfig(config: Config, featureKey: FeatureKey) {
@@ -97,10 +111,10 @@ export function buildFeatureProviderPatch(
     let current: Record<string, unknown> = fragment
     for (let i = 0; i < def.configPath.length - 1; i++) {
       const next: Record<string, unknown> = {}
-      current[def.configPath[i]] = next
+      current[def.configPath[i]!] = next
       current = next
     }
-    current[def.configPath[def.configPath.length - 1]] = newId
+    current[def.configPath[def.configPath.length - 1]!] = newId
 
     patch = mergeWithArrayOverwrite(patch, fragment)
   }

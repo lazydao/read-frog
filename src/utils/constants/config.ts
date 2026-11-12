@@ -1,12 +1,48 @@
 import type { Config } from "@/types/config/config"
 import type { FloatingButtonSide } from "@/types/config/floating-button"
-import type { SelectionToolbarCustomAction } from "@/types/config/selection-toolbar"
+import type {
+  SelectionToolbarCustomAction,
+  SelectionToolbarCustomActionOutputField,
+} from "@/types/config/selection-toolbar"
 import type { PageTranslateRange } from "@/types/config/translate"
+import { DEFAULT_LAYOUT } from "@read-frog/layout-engine/presets"
+import {
+  buildDictionaryActionLayout,
+  buildImproveWritingActionLayout,
+  buildSentenceAnalysisActionLayout,
+} from "@/utils/layout-host/slots"
 import { BUILT_IN_AI_PROVIDER_ID } from "@/utils/providers/provider-registry"
-import { CUSTOM_ACTION_TEMPLATES } from "./custom-action-templates"
-import { DEFAULT_TRANSLATE_PROMPTS_CONFIG } from "./prompt"
-import { buildDefaultProviderConfigList, DEFAULT_PROVIDER_CONFIG_LIST } from "./providers"
-import { DEFAULT_SELECTION_OVERLAY_OPACITY } from "./selection"
+import {
+  BUILT_IN_ACTION_DEFAULT_SHORTCUTS,
+  BUILT_IN_ACTION_IDS,
+  BUILT_IN_DICTIONARY_ACTION_ID,
+  BUILT_IN_IMPROVE_WRITING_ACTION_ID,
+  BUILT_IN_SENTENCE_ANALYSIS_ACTION_ID,
+} from "./custom-action"
+import {
+  createDictionaryDefinition,
+  createImproveWritingDefinition,
+  createSentenceAnalysisDefinition,
+} from "./custom-action-templates"
+import { DEFAULT_GLOSSARY_CONFIG } from "./glossary"
+import { DEFAULT_NODE_TRANSLATION_SHORTCUT_KEY } from "./hotkeys"
+import {
+  DEFAULT_SUBTITLE_TRANSLATE_PROMPTS_CONFIG,
+  DEFAULT_TRANSLATE_PROMPTS_CONFIG,
+} from "./prompt"
+import {
+  buildDefaultProviderConfigList,
+  DEFAULT_PROVIDER_CONFIG,
+  DEFAULT_PROVIDER_CONFIG_LIST,
+  MICROSOFT_TRANSLATE_PROVIDER_ID,
+} from "./providers"
+import {
+  DEFAULT_ANNOTATION_MODE_SHORTCUT_KEY,
+  DEFAULT_SELECTION_ANNOTATION_SHORTCUT_KEY,
+  DEFAULT_SELECTION_OVERLAY_OPACITY,
+  DEFAULT_SELECTION_SPEAK_SHORTCUT_KEY,
+  SELECTION_TOOLBAR_FEATURE_IDS,
+} from "./selection"
 import { DEFAULT_SIDE_CONTENT_WIDTH } from "./side"
 import {
   DEFAULT_BACKGROUND_OPACITY,
@@ -16,6 +52,7 @@ import {
   DEFAULT_FONT_WEIGHT,
   DEFAULT_SUBTITLE_COLOR,
   DEFAULT_SUBTITLE_POSITION,
+  DEFAULT_SUBTITLES_TOGGLE_SHORTCUT_KEY,
   DEFAULT_TRANSLATION_POSITION,
 } from "./subtitles"
 import {
@@ -30,74 +67,126 @@ import {
   DEFAULT_SELECTION_TRANSLATION_SHORTCUT_KEY,
   DEFAULT_TRANSLATION_MODE_SHORTCUT_KEY,
 } from "./translate"
+import { DEFAULT_TRANSLATION_HUB_SHORTCUT_KEY } from "./translation-hub"
 import { TRANSLATION_NODE_STYLE_ON_INSTALLED } from "./translation-node-style"
 import { DEFAULT_TTS_CONFIG } from "./tts"
 
-export const CONFIG_STORAGE_KEY = "config"
+export { CONFIG_STORAGE_KEY } from "./config-storage-key"
 export const LAST_SYNCED_CONFIG_STORAGE_KEY = "lastSyncedConfig"
 export const GOOGLE_DRIVE_TOKEN_STORAGE_KEY = "__googleDriveToken"
 
 export const THEME_STORAGE_KEY = "theme"
-export const DEFAULT_DETECTED_CODE = "eng" as const
-export const CONFIG_SCHEMA_VERSION = 86
+export const DEFAULT_DETECTED_CODE = "en" as const
+export const CONFIG_SCHEMA_VERSION = 122
 
 export const DEFAULT_FLOATING_BUTTON_POSITION = 0.66
 export const DEFAULT_FLOATING_BUTTON_SIDE: FloatingButtonSide = "right"
 
-/**
- * Build the default "Dictionary" custom action. Its `name`/`systemPrompt`/`prompt`/output
- * field labels are resolved via `i18n.t` and, once written to a user's config, become
- * frozen user data. To persist them in the user's chosen `uiLanguage` (not whatever the
- * i18next singleton defaulted to at module-import time), `initializeConfig` calls this
- * again after `initI18n` for the config it actually writes on a fresh install.
- *
- * The module-scope `defaultDictionaryAction` below stays (DEFAULT_CONFIG must expose a
- * populated `customActions` for in-memory fallbacks and tests); its strings are only ever
- * a transient fallback, never the persisted value.
- */
-export function createDefaultDictionaryAction(): SelectionToolbarCustomAction | null {
-  const template = CUSTOM_ACTION_TEMPLATES.find((t) => t.id === "dictionary")
-  if (!template) return null
+type OutputSchema = SelectionToolbarCustomActionOutputField[]
 
-  const action = template.createAction(BUILT_IN_AI_PROVIDER_ID)
-  return {
-    ...action,
-    id: "default-dictionary",
-    outputSchema: action.outputSchema.map((field) => ({
-      ...field,
-      id: field.id.startsWith("dictionary-")
-        ? `default-${field.id}`
-        : `default-dictionary-${field.id}`,
-    })),
+// A built-in action's card, rebuilt only when its fields' ids change: it is
+// resolved on every read of the action. Cards place fields by id and hold no
+// words of their own (the sentence analysis card's come from ctx), so nothing
+// else about the language or the names goes into one.
+function memoizeBuiltInLayout(build: (outputSchema: OutputSchema) => string | null) {
+  let memo: { key: string; layout: string } | null = null
+  return (outputSchema: OutputSchema): string => {
+    const key = JSON.stringify(outputSchema.map((field) => field.id))
+    if (memo?.key !== key) memo = { key, layout: build(outputSchema) ?? DEFAULT_LAYOUT }
+    return memo.layout
   }
 }
 
-/** Default custom actions for a fresh install, resolved against the current i18next language. */
-export function buildDefaultCustomActions(): SelectionToolbarCustomAction[] {
-  const dictionaryAction = createDefaultDictionaryAction()
-  return dictionaryAction ? [dictionaryAction] : []
+const getBuiltInDictionaryLayout = memoizeBuiltInLayout(buildDictionaryActionLayout)
+const getBuiltInSentenceAnalysisLayout = memoizeBuiltInLayout(buildSentenceAnalysisActionLayout)
+const getBuiltInImproveWritingLayout = memoizeBuiltInLayout(buildImproveWritingActionLayout)
+
+/**
+ * Build the code-owned Dictionary action definition in the current UI locale.
+ * Only enabled/provider/Notebase state is persisted; callers merge those mutable
+ * fields onto this definition at read time. The layout is generated here too
+ * (never persisted), so it always follows the current locale's field names.
+ */
+export function createDefaultDictionaryAction(): SelectionToolbarCustomAction {
+  const action = createDictionaryDefinition(BUILT_IN_AI_PROVIDER_ID)
+  const outputSchema = action.outputSchema.map((field) => ({
+    ...field,
+    id: field.id.startsWith("dictionary-")
+      ? `default-${field.id}`
+      : `default-dictionary-${field.id}`,
+  }))
+  return {
+    ...action,
+    id: BUILT_IN_DICTIONARY_ACTION_ID,
+    outputSchema,
+    // Built for the renamed ids: the card's tail matches the fields it has
+    // already placed by id, so the preset's card (keyed on `dictionary-*`)
+    // would list every slot field a second time.
+    layout: getBuiltInDictionaryLayout(outputSchema),
+  }
 }
 
-const defaultDictionaryAction = createDefaultDictionaryAction()
+/**
+ * The code-owned Sentence Analysis action, built like the Dictionary: from its
+ * preset, with `default-` field ids, in the current UI locale, and only its
+ * enabled/provider/Notebase state persisted.
+ */
+export function createDefaultSentenceAnalysisAction(): SelectionToolbarCustomAction {
+  const action = createSentenceAnalysisDefinition(BUILT_IN_AI_PROVIDER_ID)
+  const outputSchema = action.outputSchema.map((field) => ({
+    ...field,
+    id: `default-${field.id}`,
+  }))
+  return {
+    ...action,
+    id: BUILT_IN_SENTENCE_ANALYSIS_ACTION_ID,
+    outputSchema,
+    layout: getBuiltInSentenceAnalysisLayout(outputSchema),
+  }
+}
+
+/**
+ * The code-owned Improve Writing action, built like Sentence Analysis. Unlike
+ * the other built-in actions it starts off the toolbar itself (see
+ * `selectionToolbar.unpinned`): it waits in the toolbar's "more" menu. A
+ * config without its state reads it as off, as the schema does.
+ */
+export function createDefaultImproveWritingAction(): SelectionToolbarCustomAction {
+  const action = createImproveWritingDefinition(BUILT_IN_AI_PROVIDER_ID)
+  const outputSchema = action.outputSchema.map((field) => ({
+    ...field,
+    id: `default-${field.id}`,
+  }))
+  return {
+    ...action,
+    id: BUILT_IN_IMPROVE_WRITING_ACTION_ID,
+    enabled: false,
+    outputSchema,
+    layout: getBuiltInImproveWritingLayout(outputSchema),
+  }
+}
 
 export const DEFAULT_CONFIG: Config = {
   language: {
     sourceCode: "auto",
-    targetCode: "cmn",
+    targetCode: "zh-Hans",
     level: "intermediate",
   },
   providersConfig: DEFAULT_PROVIDER_CONFIG_LIST,
-  translate: {
-    providerId: "microsoft-translate-default",
+  pageTranslation: {
+    providerId: MICROSOFT_TRANSLATE_PROVIDER_ID,
     mode: "bilingual",
     modeShortcut: DEFAULT_TRANSLATION_MODE_SHORTCUT_KEY,
     node: {
       enabled: false,
       hotkey: "control",
+      shortcut: DEFAULT_NODE_TRANSLATION_SHORTCUT_KEY,
+      forceRetranslation: false,
     },
     page: {
       range: "all",
-      autoTranslatePatterns: ["news.ycombinator.com"],
+      translateTitle: true,
+      autoTranslatePatterns: ["*.news.ycombinator.com"],
       neverAutoTranslatePatterns: [],
       autoTranslateLanguages: [],
       shortcut: DEFAULT_AUTO_TRANSLATE_SHORTCUT_KEY,
@@ -145,16 +234,46 @@ export const DEFAULT_CONFIG: Config = {
     features: {
       translate: {
         enabled: true,
-        providerId: "microsoft-translate-default",
+        providerId: MICROSOFT_TRANSLATE_PROVIDER_ID,
         shortcut: DEFAULT_SELECTION_TRANSLATION_SHORTCUT_KEY,
       },
       speak: {
         enabled: true,
+        shortcut: DEFAULT_SELECTION_SPEAK_SHORTCUT_KEY,
       },
     },
-    customActions: defaultDictionaryAction ? [defaultDictionaryAction] : [],
-    saveSuggestion: {
+    annotation: {
       enabled: true,
+      shortcut: DEFAULT_SELECTION_ANNOTATION_SHORTCUT_KEY,
+      modeShortcut: DEFAULT_ANNOTATION_MODE_SHORTCUT_KEY,
+    },
+    builtInActions: {
+      dictionary: {
+        enabled: true,
+        providerId: BUILT_IN_AI_PROVIDER_ID,
+        shortcut: BUILT_IN_ACTION_DEFAULT_SHORTCUTS[BUILT_IN_DICTIONARY_ACTION_ID],
+      },
+      sentenceAnalysis: {
+        enabled: true,
+        providerId: BUILT_IN_AI_PROVIDER_ID,
+        shortcut: BUILT_IN_ACTION_DEFAULT_SHORTCUTS[BUILT_IN_SENTENCE_ANALYSIS_ACTION_ID],
+      },
+      improveWriting: {
+        enabled: true,
+        providerId: BUILT_IN_AI_PROVIDER_ID,
+        shortcut: BUILT_IN_ACTION_DEFAULT_SHORTCUTS[BUILT_IN_IMPROVE_WRITING_ACTION_ID],
+      },
+    },
+    customActions: [],
+    order: [...SELECTION_TOOLBAR_FEATURE_IDS, ...BUILT_IN_ACTION_IDS],
+    unpinned: [BUILT_IN_IMPROVE_WRITING_ACTION_ID],
+    noteSuggestion: {
+      enabled: true,
+      actionId: BUILT_IN_DICTIONARY_ACTION_ID,
+      // Fresh installs always carry the OpenAI default provider; suggestions
+      // start working the moment the user adds their key, with no hosted plan
+      // requirement attached.
+      providerId: DEFAULT_PROVIDER_CONFIG.openai.id,
     },
   },
   sideContent: {
@@ -168,7 +287,7 @@ export const DEFAULT_CONFIG: Config = {
   },
   inputTranslation: {
     enabled: true,
-    providerId: "microsoft-translate-default",
+    providerId: MICROSOFT_TRANSLATE_PROVIDER_ID,
     fromLang: "targetCode",
     toLang: "sourceCode",
     enableCycle: false,
@@ -176,8 +295,16 @@ export const DEFAULT_CONFIG: Config = {
   },
   videoSubtitles: {
     enabled: true,
-    autoStart: false,
-    providerId: "microsoft-translate-default",
+    autoStart: {
+      youtube: false,
+      xcom: false,
+      netflix: false,
+      bilibili: false,
+      udemy: false,
+      edx: false,
+    },
+    toggleShortcut: DEFAULT_SUBTITLES_TOGGLE_SHORTCUT_KEY,
+    providerId: MICROSOFT_TRANSLATE_PROVIDER_ID,
     style: {
       displayMode: DEFAULT_DISPLAY_MODE,
       translationPosition: DEFAULT_TRANSLATION_POSITION,
@@ -196,8 +323,11 @@ export const DEFAULT_CONFIG: Config = {
       container: {
         backgroundOpacity: DEFAULT_BACKGROUND_OPACITY,
       },
+      customCSS: null,
     },
     aiSegmentation: false,
+    wordLookupActionId: BUILT_IN_DICTIONARY_ACTION_ID,
+    pauseOnHover: false,
     requestQueueConfig: {
       capacity: DEFAULT_REQUEST_CAPACITY,
       rate: DEFAULT_REQUEST_RATE,
@@ -206,7 +336,7 @@ export const DEFAULT_CONFIG: Config = {
       maxCharactersPerBatch: DEFAULT_BATCH_CONFIG.maxCharactersPerBatch,
       maxItemsPerBatch: DEFAULT_BATCH_CONFIG.maxItemsPerBatch,
     },
-    customPromptsConfig: DEFAULT_TRANSLATE_PROMPTS_CONFIG,
+    customPromptsConfig: DEFAULT_SUBTITLE_TRANSLATE_PROMPTS_CONFIG,
     position: DEFAULT_SUBTITLE_POSITION,
   },
   siteControl: {
@@ -219,11 +349,20 @@ export const DEFAULT_CONFIG: Config = {
     disabledBuiltInRules: [],
   },
   uiLanguage: "auto",
+  translationHub: {
+    shortcut: DEFAULT_TRANSLATION_HUB_SHORTCUT_KEY,
+    selectedProviderIds: null,
+    sourceCode: null,
+    targetCode: null,
+    promptId: DEFAULT_TRANSLATE_PROMPTS_CONFIG.promptId,
+  },
+  glossary: { ...DEFAULT_GLOSSARY_CONFIG },
 }
 
 /**
- * Build a default config whose persisted custom-action strings use the initialized UI locale.
- * Callers must initialize i18n before calling this function.
+ * Translate features start on Microsoft Translate, which is reachable everywhere; a fresh
+ * install is moved onto Google Translate afterwards where that endpoint answers — see
+ * `selectFreshTranslateProviders`.
  */
 export function buildFreshDefaultConfig(): Config {
   return {
@@ -231,7 +370,21 @@ export function buildFreshDefaultConfig(): Config {
     providersConfig: buildDefaultProviderConfigList(),
     selectionToolbar: {
       ...DEFAULT_CONFIG.selectionToolbar,
-      customActions: buildDefaultCustomActions(),
+      builtInActions: {
+        dictionary: {
+          enabled: true,
+          providerId: BUILT_IN_AI_PROVIDER_ID,
+        },
+        sentenceAnalysis: {
+          enabled: true,
+          providerId: BUILT_IN_AI_PROVIDER_ID,
+        },
+        improveWriting: {
+          enabled: true,
+          providerId: BUILT_IN_AI_PROVIDER_ID,
+        },
+      },
+      customActions: [],
     },
   }
 }

@@ -1,4 +1,5 @@
 import type { Config } from "@/types/config/config"
+import { isSameLanguage } from "@read-frog/definitions"
 import { detectLanguage } from "@/utils/content/language"
 import { prepareTranslationText } from "./text-preparation"
 
@@ -14,9 +15,11 @@ export const MIN_LENGTH_FOR_TARGET_LANG_DETECTION = 50
  * is unreliable on short input.
  */
 export async function shouldSkipAsTargetLanguage(text: string, config: Config): Promise<boolean> {
-  if (!config.translate.page.enableTargetLanguageSkip) return false
+  if (!config.pageTranslation.page.enableTargetLanguageSkip) return false
   const prepared = prepareTranslationText(text)
   if (prepared.length < MIN_LENGTH_FOR_TARGET_LANG_DETECTION) return false
   const detected = await detectLanguage(prepared, { enableLLM: false })
-  return detected === config.language.targetCode
+  // Regions do not count: franc reads European Portuguese as `pt-BR`, and a
+  // `pt-PT` reader needs neither translated.
+  return detected !== null && isSameLanguage(detected, config.language.targetCode)
 }

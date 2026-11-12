@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import type { Config } from "@/types/config/config"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen } from "@testing-library/react"
 import { createStore, Provider } from "jotai"
 import { describe, expect, it, vi } from "vitest"
@@ -10,32 +12,40 @@ vi.mock("@/components/llm-providers/provider-selector", () => ({
   default: () => <div>ProviderSelector</div>,
 }))
 
-describe("FeatureProviderSelectorList", () => {
-  it("renders only page and subtitle provider rows by default", () => {
-    const config = structuredClone(DEFAULT_CONFIG)
-    const providerId = config.providersConfig[0].id
-    config.selectionToolbar.customActions = [
-      {
-        id: "legacy-action",
-        name: "Legacy Action",
-        providerId,
-        enabled: true,
-        icon: "tabler:sparkles",
-        systemPrompt: "You are helpful.",
-        prompt: "Do something.",
-        outputSchema: [],
-      },
-    ]
+function cloneConfig(config: Config): Config {
+  return JSON.parse(JSON.stringify(config)) as Config
+}
 
-    const store = createStore()
-    store.set(configAtom, config)
-    render(
+function renderWithConfig(config: Config) {
+  const store = createStore()
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  store.set(configAtom, config)
+  render(
+    <QueryClientProvider client={queryClient}>
       <Provider store={store}>
         <FeatureProviderSelectorList />
-      </Provider>,
-    )
+      </Provider>
+    </QueryClientProvider>,
+  )
+}
 
-    expect(screen.getAllByText("ProviderSelector")).toHaveLength(2)
-    expect(screen.queryByText("Legacy Action")).not.toBeInTheDocument()
+describe("featureProviderSelectorList feature rows", () => {
+  it("renders one provider row per core feature only", () => {
+    renderWithConfig(cloneConfig(DEFAULT_CONFIG))
+
+    // The test i18n facade resolves keys to themselves, so the row labels are
+    // the raw feature label keys.
+    for (const featureKey of ["pageTranslation", "videoSubtitles"]) {
+      expect(
+        screen.getByText(`options.apiProviders.featureProviders.features.${featureKey}`),
+      ).toBeInTheDocument()
+    }
+    for (const featureKey of ["selectionTranslation", "inputTranslation", "noteSuggestion"]) {
+      expect(
+        screen.queryByText(`options.apiProviders.featureProviders.features.${featureKey}`),
+      ).not.toBeInTheDocument()
+    }
   })
 })

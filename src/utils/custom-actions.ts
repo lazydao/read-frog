@@ -1,0 +1,181 @@
+import type { Config } from "@/types/config/config"
+import type {
+  SelectionToolbarBuiltInActionState,
+  SelectionToolbarCustomAction,
+} from "@/types/config/selection-toolbar"
+import type { BuiltInActionId } from "@/utils/constants/custom-action"
+import {
+  createDefaultDictionaryAction,
+  createDefaultImproveWritingAction,
+  createDefaultSentenceAnalysisAction,
+} from "@/utils/constants/config"
+import {
+  BUILT_IN_ACTION_DEFAULT_SHORTCUTS,
+  BUILT_IN_ACTION_IDS,
+  BUILT_IN_ACTION_KEYS,
+  BUILT_IN_DICTIONARY_ACTION_ID,
+  BUILT_IN_IMPROVE_WRITING_ACTION_ID,
+  BUILT_IN_SENTENCE_ANALYSIS_ACTION_ID,
+  isBuiltInActionId,
+} from "@/utils/constants/custom-action"
+import { getRandomUUID } from "@/utils/crypto-polyfill"
+import { getUniqueName } from "@/utils/name"
+
+type SelectionToolbarConfig = Config["selectionToolbar"]
+
+const BUILT_IN_ACTION_DEFINITIONS: Record<BuiltInActionId, () => SelectionToolbarCustomAction> = {
+  [BUILT_IN_DICTIONARY_ACTION_ID]: createDefaultDictionaryAction,
+  [BUILT_IN_SENTENCE_ANALYSIS_ACTION_ID]: createDefaultSentenceAnalysisAction,
+  [BUILT_IN_IMPROVE_WRITING_ACTION_ID]: createDefaultImproveWritingAction,
+}
+
+// A built-in action as it reads: its code-owned definition in the current UI
+// language, with the persisted enabled/provider/Notebase/shortcut state merged
+// on. A state without a shortcut has the action's default key.
+export function getBuiltInAction(
+  selectionToolbar: SelectionToolbarConfig,
+  id: BuiltInActionId,
+): SelectionToolbarCustomAction {
+  const definition = BUILT_IN_ACTION_DEFINITIONS[id]()
+  const state = selectionToolbar.builtInActions?.[BUILT_IN_ACTION_KEYS[id]] ?? {
+    enabled: definition.enabled !== false,
+    providerId: definition.providerId,
+  }
+  return {
+    ...definition,
+    enabled: state.enabled,
+    providerId: state.providerId,
+    shortcut: state.shortcut ?? BUILT_IN_ACTION_DEFAULT_SHORTCUTS[id],
+    ...(state.notebaseConnection ? { notebaseConnection: state.notebaseConnection } : {}),
+  }
+}
+
+export function getBuiltInDictionaryAction(
+  selectionToolbar: SelectionToolbarConfig,
+): SelectionToolbarCustomAction {
+  return getBuiltInAction(selectionToolbar, BUILT_IN_DICTIONARY_ACTION_ID)
+}
+
+export function getBuiltInActions(
+  selectionToolbar: SelectionToolbarConfig,
+): SelectionToolbarCustomAction[] {
+  return BUILT_IN_ACTION_IDS.map((id) => getBuiltInAction(selectionToolbar, id))
+}
+
+export function getSelectionToolbarActions(
+  selectionToolbar: SelectionToolbarConfig,
+): SelectionToolbarCustomAction[] {
+  return [...getBuiltInActions(selectionToolbar), ...selectionToolbar.customActions]
+}
+
+export function findSelectionToolbarAction(
+  selectionToolbar: SelectionToolbarConfig,
+  actionId: string,
+): SelectionToolbarCustomAction | undefined {
+  if (isBuiltInActionId(actionId)) {
+    return getBuiltInAction(selectionToolbar, actionId)
+  }
+  return selectionToolbar.customActions.find((action) => action.id === actionId)
+}
+
+/**
+ * The action a click on a subtitle word runs: the one picked in settings, or
+ * the built-in Dictionary once that one is turned off or deleted.
+ */
+export function resolveWordLookupAction(config: Config): SelectionToolbarCustomAction {
+  const action = findSelectionToolbarAction(
+    config.selectionToolbar,
+    config.videoSubtitles.wordLookupActionId,
+  )
+  return action && action.enabled !== false
+    ? action
+    : getBuiltInDictionaryAction(config.selectionToolbar)
+}
+
+export function resolveNoteSuggestionAction(
+  selectionToolbar: SelectionToolbarConfig,
+): SelectionToolbarCustomAction {
+  const actionId = selectionToolbar.noteSuggestion.actionId
+  const action = findSelectionToolbarAction(selectionToolbar, actionId)
+  if (!action) {
+    throw new Error(
+      `Note suggestion action "${actionId}" is missing from the validated configuration.`,
+    )
+  }
+  return action
+}
+
+// A state without a key reads as the action's default key, and is written
+// back without one while the key is still that default: a UI context that
+// writes a pre-v110 config must not store the default, or the v110 migration
+// could no longer tell it from a key the user chose.
+function toBuiltInState(
+  action: SelectionToolbarCustomAction & { id: BuiltInActionId },
+  current: SelectionToolbarBuiltInActionState | undefined,
+): SelectionToolbarBuiltInActionState {
+  const keepsDefaultKey =
+    current?.shortcut === undefined &&
+    action.shortcut === BUILT_IN_ACTION_DEFAULT_SHORTCUTS[action.id]
+  return {
+    enabled: action.enabled !== false,
+    providerId: action.providerId,
+    // Written whole: an update merges into the stored connection key by key,
+    // so a list this one leaves out would outlive the Notebase it was for.
+    notebaseConnection: action.notebaseConnection && {
+      skippedFieldIds: undefined,
+      ...action.notebaseConnection,
+    },
+    ...(keepsDefaultKey ? {} : { shortcut: action.shortcut }),
+  }
+}
+
+export function replaceSelectionToolbarAction(
+  selectionToolbar: SelectionToolbarConfig,
+  action: SelectionToolbarCustomAction,
+): SelectionToolbarConfig {
+  if (isBuiltInActionId(action.id)) {
+    const key = BUILT_IN_ACTION_KEYS[action.id]
+    return {
+      ...selectionToolbar,
+      builtInActions: {
+        ...selectionToolbar.builtInActions,
+        [key]: toBuiltInState({ ...action, id: action.id }, selectionToolbar.builtInActions?.[key]),
+      },
+    }
+  }
+
+  return {
+    ...selectionToolbar,
+    customActions: selectionToolbar.customActions.map((current) =>
+      current.id === action.id ? action : current,
+    ),
+  }
+}
+
+export function patchSelectionToolbarAction(
+  selectionToolbar: SelectionToolbarConfig,
+  actionId: string,
+  patch: Partial<
+    Pick<SelectionToolbarCustomAction, "enabled" | "providerId" | "notebaseConnection" | "shortcut">
+  >,
+): SelectionToolbarConfig {
+  const action = findSelectionToolbarAction(selectionToolbar, actionId)
+  if (!action) {
+    return selectionToolbar
+  }
+
+  return replaceSelectionToolbarAction(selectionToolbar, { ...action, ...patch })
+}
+
+// A copy starts without a key: one key runs one action.
+export function duplicateSelectionToolbarAction(
+  action: SelectionToolbarCustomAction,
+  allActions: SelectionToolbarCustomAction[],
+): SelectionToolbarCustomAction {
+  const { shortcut: _shortcut, ...copy } = structuredClone(action)
+  return {
+    ...copy,
+    id: getRandomUUID(),
+    name: getUniqueName(action.name, new Set(allActions.map((candidate) => candidate.name))),
+  }
+}

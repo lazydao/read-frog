@@ -25,7 +25,9 @@ export interface PlayerData {
   playerState: number
   selectedTrackLanguageCode: string | null
   selectedTrackVssId: string | null
+  defaultCaptionTrackIndex: number | null
   cachedTimedtextUrl: string | null
+  isLiveContent: boolean
 }
 
 export const youtubeTimedTextSegSchema = z.object({

@@ -6,9 +6,9 @@ import { Provider as JotaiProvider } from "jotai"
 import { useHydrateAtoms } from "jotai/utils"
 import * as React from "react"
 import { browser } from "#imports"
-import FrogToast from "@/components/frog-toast"
 import { ThemeProvider } from "@/components/providers/theme-provider"
 import { RecoveryBoundary } from "@/components/recovery/recovery-boundary"
+import { AnchoredToastProvider, ToastProvider } from "@/components/ui/base-ui/toast"
 import { TooltipProvider } from "@/components/ui/base-ui/tooltip"
 import { configAtom } from "@/utils/atoms/config"
 import { baseThemeModeAtom } from "@/utils/atoms/theme"
@@ -32,7 +32,7 @@ import {
   isCurrentSiteInWhitelistAtom,
   isInSiteControlList,
 } from "./atoms/site-control"
-import "@fontsource-variable/onest/index.css"
+import "@fontsource-variable/inter/index.css"
 import "@/assets/styles/text-small.css"
 import "@/assets/styles/theme.css"
 
@@ -71,7 +71,7 @@ async function initApp() {
 
   await initI18n(config.uiLanguage)
 
-  const tabId = activeTab[0].id
+  const tabId = activeTab[0]!.id
 
   let isPageTranslated: boolean = false
   if (tabId) {
@@ -81,7 +81,7 @@ async function initApp() {
       })) ?? false
   }
 
-  const isInPatterns = tabId ? await getIsInPatterns(config.translate) : false
+  const isInPatterns = tabId ? await getIsInPatterns(config.pageTranslation) : false
 
   const activeTabUrl = activeTab[0]?.url || ""
   const isIgnoreTab = isIgnoreUrl(activeTabUrl)
@@ -110,11 +110,14 @@ async function initApp() {
           >
             <ThemeProvider>
               <TooltipProvider>
-                <FrogToast />
                 <LocaleBoundary>
-                  <RecoveryBoundary>
-                    <App />
-                  </RecoveryBoundary>
+                  <ToastProvider>
+                    <AnchoredToastProvider>
+                      <RecoveryBoundary>
+                        <App />
+                      </RecoveryBoundary>
+                    </AnchoredToastProvider>
+                  </ToastProvider>
                 </LocaleBoundary>
               </TooltipProvider>
             </ThemeProvider>

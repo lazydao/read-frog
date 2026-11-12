@@ -1,23 +1,32 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { DEFAULT_CONFIG } from "@/utils/constants/config"
 import { NO_TRANSLATION_SENTINEL } from "@/utils/constants/prompt"
 import { detectLanguage } from "@/utils/content/language"
+import { Sha256Hex } from "@/utils/hash"
 import { executeTranslate } from "@/utils/host/translate/execute-translate"
+import { MIN_LENGTH_FOR_SKIP_LANGUAGE_DETECTION } from "@/utils/host/translate/translate-text"
 import {
   translateTextForInput,
   translateTextForPage,
   translateTextForPageTitle,
 } from "@/utils/host/translate/translate-variants"
+import {
+  beginPageTranslationSession,
+  endPageTranslationSession,
+} from "@/utils/host/translate/translation-session"
 import { getTranslatePrompt } from "@/utils/prompts/translate"
+import { HostedAiProviderUnavailableError } from "@/utils/providers/provider-ref"
+import { isTranslationCancelledError } from "@/utils/request/cancellation"
+
+// Mock dependencies
+vi.mock("@/utils/config/storage", () => ({
+  getLocalConfig: vi.fn<(...args: any[]) => any>(),
+}))
 
 vi.mock("@/utils/message", () => ({
   sendMessage: vi.fn<(...args: any[]) => any>(),
-}))
-
-vi.mock("@/utils/host/translate/api/microsoft", () => ({
-  microsoftTranslate: vi.fn<(...args: any[]) => any>(),
 }))
 
 vi.mock("@/utils/host/translate/api/google", () => ({
@@ -49,7 +58,6 @@ vi.mock("@/utils/host/translate/webpage-summary", () => ({
 }))
 
 let mockSendMessage: any
-let mockMicrosoftTranslate: any
 let mockGoogleTranslate: any
 let mockDeepLTranslate: any
 let mockDeepLXTranslate: any
@@ -59,31 +67,12 @@ let mockGetOrCreateWebPageContext: any
 let mockGetOrGenerateWebPageSummary: any
 let mockDetectLanguage: any
 
-function mockConfigAwareMessageResponse(response: string) {
-  mockSendMessage.mockImplementation(async (type: string) => {
-    if (type === "getInitialConfig") {
-      return await mockGetConfigFromStorage()
-    }
-    if (type === "enqueueTranslateRequest") {
-      return response
-    }
-    return undefined
-  })
-}
-
-function getMessageCalls(type: string) {
-  return mockSendMessage.mock.calls.filter(([messageType]: [string]) => messageType === type)
-}
-
 describe("translate-text", () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     document.title = "Document Title"
     document.body.innerHTML = "<main>Body content</main>"
     mockSendMessage = vi.mocked((await import("@/utils/message")).sendMessage)
-    mockMicrosoftTranslate = vi.mocked(
-      (await import("@/utils/host/translate/api/microsoft")).microsoftTranslate,
-    )
     mockGoogleTranslate = vi.mocked(
       (await import("@/utils/host/translate/api/google")).googleTranslate,
     )
@@ -93,7 +82,7 @@ describe("translate-text", () => {
     mockDeepLXTranslate = vi.mocked(
       (await import("@/utils/host/translate/api/deeplx")).deeplxTranslate,
     )
-    mockGetConfigFromStorage = vi.fn<(...args: any[]) => any>()
+    mockGetConfigFromStorage = vi.mocked((await import("@/utils/config/storage")).getLocalConfig)
     mockGetTranslatePrompt = vi.mocked(
       (await import("@/utils/prompts/translate")).getTranslatePrompt,
     )
@@ -117,12 +106,6 @@ describe("translate-text", () => {
 
     // Mock getConfigFromStorage to return DEFAULT_CONFIG
     mockGetConfigFromStorage.mockResolvedValue(DEFAULT_CONFIG)
-    mockSendMessage.mockImplementation(async (type: string) => {
-      if (type === "getInitialConfig") {
-        return await mockGetConfigFromStorage()
-      }
-      return undefined
-    })
 
     // Mock getTranslatePrompt to return a simple prompt pair
     mockGetTranslatePrompt.mockResolvedValue({
@@ -133,37 +116,66 @@ describe("translate-text", () => {
 
   describe("translateTextForPage", () => {
     it("should send message with correct parameters", async () => {
-      mockConfigAwareMessageResponse("translated text")
+      mockSendMessage.mockResolvedValue("translated text")
 
       const result = await translateTextForPage("test text")
 
       expect(result).toBe("translated text")
+      const googleProvider = DEFAULT_CONFIG.providersConfig.find(
+        (provider) => provider.id === DEFAULT_CONFIG.pageTranslation.providerId,
+      )!
       expect(mockSendMessage).toHaveBeenCalledWith(
         "enqueueTranslateRequest",
         expect.objectContaining({
           text: "test text",
           langConfig: DEFAULT_CONFIG.language,
-          providerConfig: expect.any(Object),
+          providerRef: { kind: "local", config: googleProvider },
           scheduleAt: expect.any(Number),
-          hash: expect.any(String),
+          // Preserve the pre-system-provider local cache identity exactly.
+          hash: Sha256Hex(
+            "test text",
+            JSON.stringify(googleProvider),
+            DEFAULT_CONFIG.language.sourceCode,
+            DEFAULT_CONFIG.language.targetCode,
+            "textFormat:plain",
+          ),
         }),
       )
       expect(mockGetOrCreateWebPageContext).not.toHaveBeenCalled()
       expect(mockGetOrGenerateWebPageSummary).not.toHaveBeenCalled()
     })
 
+    it("forwards an explicit force-retranslation request without changing normal requests", async () => {
+      mockSendMessage.mockResolvedValue("translated text")
+
+      await translateTextForPage("hover text", "plain", {
+        forceRetranslation: true,
+      })
+      await translateTextForPage("page text")
+
+      const enqueueCalls = mockSendMessage.mock.calls.filter(
+        ([type]: [string]) => type === "enqueueTranslateRequest",
+      )
+      expect(enqueueCalls).toHaveLength(2)
+      expect(enqueueCalls[0][1]).toEqual(expect.objectContaining({ forceRetranslation: true }))
+      expect(enqueueCalls[1][1].forceRetranslation).not.toBe(true)
+    })
+
     it("maps a full no-translation sentinel response to an empty string", async () => {
-      mockConfigAwareMessageResponse(NO_TRANSLATION_SENTINEL)
+      mockSendMessage.mockResolvedValue(NO_TRANSLATION_SENTINEL)
 
       const result = await translateTextForPage("test text")
 
       expect(result).toBe("")
-      expect(getMessageCalls("enqueueTranslateRequest")).toHaveLength(1)
+      // One TRANSLATION request; the page also asks for the glossary snapshot.
+      expect(
+        mockSendMessage.mock.calls.filter(([type]: [string]) => type === "enqueueTranslateRequest"),
+      ).toHaveLength(1)
     })
 
     it("returns a response containing the sentinel inside longer text verbatim", async () => {
       const mixed = `some translation ${NO_TRANSLATION_SENTINEL}`
-      mockConfigAwareMessageResponse(mixed)
+      mockSendMessage.mockResolvedValue(mixed)
 
       const result = await translateTextForPage("test text")
 
@@ -181,22 +193,22 @@ describe("translate-text", () => {
       expect(mockDetectLanguage).toHaveBeenCalledWith(targetLanguageText, {
         enableLLM: false,
       })
-      expect(getMessageCalls("enqueueTranslateRequest")).toHaveLength(0)
+      expect(mockSendMessage).not.toHaveBeenCalled()
     })
 
     it("sends the translation request when target-language precheck is disabled", async () => {
       const config = {
         ...DEFAULT_CONFIG,
-        translate: {
-          ...DEFAULT_CONFIG.translate,
+        pageTranslation: {
+          ...DEFAULT_CONFIG.pageTranslation,
           page: {
-            ...DEFAULT_CONFIG.translate.page,
+            ...DEFAULT_CONFIG.pageTranslation.page,
             enableTargetLanguageSkip: false,
           },
         },
       }
       mockGetConfigFromStorage.mockResolvedValue(config)
-      mockConfigAwareMessageResponse("translated text")
+      mockSendMessage.mockResolvedValue("translated text")
 
       const targetLanguageText =
         "这是一个已经使用目标语言写成的较长段落，但关闭预检测后仍然应该发送翻译请求，同时确保文本长度超过检测阈值。"
@@ -215,17 +227,17 @@ describe("translate-text", () => {
     it("keeps explicit skipLanguages behavior when target-language precheck is disabled", async () => {
       const config = {
         ...DEFAULT_CONFIG,
-        translate: {
-          ...DEFAULT_CONFIG.translate,
+        pageTranslation: {
+          ...DEFAULT_CONFIG.pageTranslation,
           page: {
-            ...DEFAULT_CONFIG.translate.page,
+            ...DEFAULT_CONFIG.pageTranslation.page,
             enableTargetLanguageSkip: false,
-            skipLanguages: ["jpn"],
+            skipLanguages: ["ja"],
           },
         },
       }
       mockGetConfigFromStorage.mockResolvedValue(config)
-      mockDetectLanguage.mockResolvedValueOnce("jpn")
+      mockDetectLanguage.mockResolvedValueOnce("ja")
 
       const japaneseText =
         "これは日本語で書かれた十分に長い段落で、明示的なスキップ言語の設定によって翻訳前にスキップされます。"
@@ -233,10 +245,85 @@ describe("translate-text", () => {
 
       expect(result).toBe("")
       expect(mockDetectLanguage).toHaveBeenCalledWith(japaneseText, {
-        minLength: 10,
+        minLength: MIN_LENGTH_FOR_SKIP_LANGUAGE_DETECTION,
         enableLLM: false,
       })
-      expect(getMessageCalls("enqueueTranslateRequest")).toHaveLength(0)
+      expect(mockSendMessage).not.toHaveBeenCalled()
+    })
+
+    // #1881: the session id is captured at pipeline ENTRY, but requests race
+    // the awaits below (config, summary). If the user cancels mid-request the
+    // request must NOT be dispatched — otherwise it lands unscoped (or after
+    // the session's cancel drain) and becomes permanently uncancellable.
+    describe("session cancellation gate", () => {
+      afterEach(() => {
+        endPageTranslationSession()
+      })
+
+      it("sends with the captured sessionId while the session stays active", async () => {
+        mockSendMessage.mockResolvedValue("translated text")
+        const sessionId = beginPageTranslationSession()
+
+        await translateTextForPage("test text")
+
+        expect(mockSendMessage).toHaveBeenCalledWith(
+          "enqueueTranslateRequest",
+          expect.objectContaining({ sessionId }),
+        )
+      })
+
+      it("aborts without dispatching when the session ends mid-request", async () => {
+        mockSendMessage.mockResolvedValue("translated text")
+        beginPageTranslationSession()
+        // getLocalConfig is awaited after the session id is captured; ending the
+        // session here mimics a user cancel landing mid-request.
+        mockGetConfigFromStorage.mockImplementation(async () => {
+          endPageTranslationSession()
+          return DEFAULT_CONFIG
+        })
+
+        let caught: unknown
+        try {
+          await translateTextForPage("test text")
+        } catch (error) {
+          caught = error
+        }
+
+        expect(isTranslationCancelledError(caught)).toBe(true)
+        expect(mockSendMessage).not.toHaveBeenCalled()
+      })
+
+      it("aborts when a new session replaces the captured one mid-request", async () => {
+        mockSendMessage.mockResolvedValue("translated text")
+        beginPageTranslationSession()
+        mockGetConfigFromStorage.mockImplementation(async () => {
+          // restart(): old session ends, a new one begins.
+          endPageTranslationSession()
+          beginPageTranslationSession()
+          return DEFAULT_CONFIG
+        })
+
+        let caught: unknown
+        try {
+          await translateTextForPage("test text")
+        } catch (error) {
+          caught = error
+        }
+
+        expect(isTranslationCancelledError(caught)).toBe(true)
+        expect(mockSendMessage).not.toHaveBeenCalled()
+      })
+
+      it("does not gate input translation (no session id)", async () => {
+        mockSendMessage.mockResolvedValue("translated text")
+        beginPageTranslationSession()
+        endPageTranslationSession()
+
+        const result = await translateTextForInput("hello", "en", "zh-Hans")
+
+        expect(result).toBe("translated text")
+        expect(mockSendMessage).toHaveBeenCalled()
+      })
     })
   })
 
@@ -244,8 +331,8 @@ describe("translate-text", () => {
     it("should use the latest original title instead of document.title when building webpage context", async () => {
       const llmConfig = {
         ...DEFAULT_CONFIG,
-        translate: {
-          ...DEFAULT_CONFIG.translate,
+        pageTranslation: {
+          ...DEFAULT_CONFIG.pageTranslation,
           providerId: "openai-default",
           enableAIContentAware: false,
         },
@@ -253,9 +340,6 @@ describe("translate-text", () => {
 
       mockGetConfigFromStorage.mockResolvedValue(llmConfig)
       mockSendMessage.mockImplementation(async (type: string) => {
-        if (type === "getInitialConfig") {
-          return await mockGetConfigFromStorage()
-        }
         if (type === "enqueueTranslateRequest") {
           return "translated page title"
         }
@@ -281,8 +365,8 @@ describe("translate-text", () => {
     it("should include webpage content for AI-aware title translation", async () => {
       const llmConfig = {
         ...DEFAULT_CONFIG,
-        translate: {
-          ...DEFAULT_CONFIG.translate,
+        pageTranslation: {
+          ...DEFAULT_CONFIG.pageTranslation,
           providerId: "openai-default",
           enableAIContentAware: true,
         },
@@ -290,9 +374,6 @@ describe("translate-text", () => {
 
       mockGetConfigFromStorage.mockResolvedValue(llmConfig)
       mockSendMessage.mockImplementation(async (type: string) => {
-        if (type === "getInitialConfig") {
-          return await mockGetConfigFromStorage()
-        }
         if (type === "enqueueTranslateRequest") {
           return "translated page title"
         }
@@ -318,8 +399,8 @@ describe("translate-text", () => {
     it("should forward document.title to regular page translations", async () => {
       const llmConfig = {
         ...DEFAULT_CONFIG,
-        translate: {
-          ...DEFAULT_CONFIG.translate,
+        pageTranslation: {
+          ...DEFAULT_CONFIG.pageTranslation,
           providerId: "openai-default",
           enableAIContentAware: false,
         },
@@ -327,9 +408,6 @@ describe("translate-text", () => {
 
       mockGetConfigFromStorage.mockResolvedValue(llmConfig)
       mockSendMessage.mockImplementation(async (type: string) => {
-        if (type === "getInitialConfig") {
-          return await mockGetConfigFromStorage()
-        }
         if (type === "enqueueTranslateRequest") {
           return "translated body text"
         }
@@ -351,10 +429,20 @@ describe("translate-text", () => {
   })
 
   describe("translateTextForInput", () => {
-    it("skips webpage context loading for non-llm input translations", async () => {
-      mockConfigAwareMessageResponse("translated input")
+    it("reports the resolved target used by the input request", async () => {
+      mockSendMessage.mockResolvedValue("translated input")
+      const onTargetLanguageResolved = vi.fn<(targetLanguage: string) => void>()
 
-      const result = await translateTextForInput("hello", "eng", "cmn")
+      await translateTextForInput("hello", "en", "zh-Hans", onTargetLanguageResolved)
+
+      expect(onTargetLanguageResolved).toHaveBeenCalledOnce()
+      expect(onTargetLanguageResolved).toHaveBeenCalledWith("zh-Hans")
+    })
+
+    it("skips webpage context loading for non-llm input translations", async () => {
+      mockSendMessage.mockResolvedValue("translated input")
+
+      const result = await translateTextForInput("hello", "en", "zh-Hans")
 
       expect(result).toBe("translated input")
       expect(mockGetOrCreateWebPageContext).not.toHaveBeenCalled()
@@ -373,8 +461,8 @@ describe("translate-text", () => {
     it("includes webpage summary for AI-aware llm input translations", async () => {
       const llmConfig = {
         ...DEFAULT_CONFIG,
-        translate: {
-          ...DEFAULT_CONFIG.translate,
+        pageTranslation: {
+          ...DEFAULT_CONFIG.pageTranslation,
           enableAIContentAware: true,
         },
         inputTranslation: {
@@ -385,9 +473,6 @@ describe("translate-text", () => {
 
       mockGetConfigFromStorage.mockResolvedValue(llmConfig)
       mockSendMessage.mockImplementation(async (type: string) => {
-        if (type === "getInitialConfig") {
-          return await mockGetConfigFromStorage()
-        }
         if (type === "enqueueTranslateRequest") {
           return "translated input"
         }
@@ -397,7 +482,7 @@ describe("translate-text", () => {
         return undefined
       })
 
-      const result = await translateTextForInput("hello", "eng", "cmn")
+      const result = await translateTextForInput("hello", "en", "zh-Hans")
 
       expect(result).toBe("translated input")
       expect(mockGetOrGenerateWebPageSummary).toHaveBeenCalledTimes(1)
@@ -411,21 +496,108 @@ describe("translate-text", () => {
         }),
       )
     })
+
+    it("degrades to no summary when the optional summary hits a hosted denial", async () => {
+      mockGetConfigFromStorage.mockResolvedValue({
+        ...DEFAULT_CONFIG,
+        pageTranslation: {
+          ...DEFAULT_CONFIG.pageTranslation,
+          enableAIContentAware: true,
+        },
+        inputTranslation: {
+          ...DEFAULT_CONFIG.inputTranslation,
+          providerId: "openai-default",
+        },
+      })
+      mockGetOrGenerateWebPageSummary.mockRejectedValue(
+        new HostedAiProviderUnavailableError(
+          { kind: "system", id: "read-frog-free-ai", name: "Built-in AI", modelTier: "normal" },
+          "Weekly credit used up",
+        ),
+      )
+      mockSendMessage.mockResolvedValue("translated input")
+
+      // Input translation has no page-translation session to reuse, so it always
+      // resolves a ref inside this optional step. Aborting here would kill the
+      // request before the translation — which resolves the same ref and is the
+      // thing the user actually invoked — could surface the denial itself.
+      const result = await translateTextForInput("hello", "en", "zh-Hans")
+
+      expect(result).toBe("translated input")
+      expect(mockSendMessage).toHaveBeenCalledWith(
+        "enqueueTranslateRequest",
+        expect.objectContaining({ webSummary: undefined }),
+      )
+    })
+  })
+
+  describe("hosted route mapping", () => {
+    // Every entry point must name its own route: the route decides which
+    // hosted quota gates and bills a system-provider run, and a copy-pasted
+    // wrong route once made page translation gate on the input-translation
+    // quota (and bypass the session's provider-ref snapshot).
+    const llmAiAwareConfig = {
+      ...DEFAULT_CONFIG,
+      pageTranslation: {
+        ...DEFAULT_CONFIG.pageTranslation,
+        providerId: "openai-default",
+        enableAIContentAware: true,
+      },
+      inputTranslation: {
+        ...DEFAULT_CONFIG.inputTranslation,
+        providerId: "openai-default",
+      },
+    }
+
+    beforeEach(() => {
+      mockGetConfigFromStorage.mockResolvedValue(llmAiAwareConfig)
+      mockSendMessage.mockResolvedValue("translated")
+    })
+
+    it("bills page translation and its summary against pageTranslation", async () => {
+      await translateTextForPage("Body text")
+
+      expect(mockSendMessage).toHaveBeenCalledWith(
+        "enqueueTranslateRequest",
+        expect.objectContaining({ hostedFeature: "pageTranslation" }),
+      )
+      // (webPageContext, providerRef, enableAIContentAware, hostedFeature)
+      expect(mockGetOrGenerateWebPageSummary.mock.calls[0]?.[3]).toBe("pageTranslation")
+    })
+
+    it("bills input translation and its summary against inputTranslation", async () => {
+      await translateTextForInput("hello", "en", "zh-Hans")
+
+      expect(mockSendMessage).toHaveBeenCalledWith(
+        "enqueueTranslateRequest",
+        expect.objectContaining({ hostedFeature: "inputTranslation" }),
+      )
+      expect(mockGetOrGenerateWebPageSummary.mock.calls[0]?.[3]).toBe("inputTranslation")
+    })
+
+    it("bills the page title against pageTranslation", async () => {
+      await translateTextForPageTitle("Source Title")
+
+      expect(mockSendMessage).toHaveBeenCalledWith(
+        "enqueueTranslateRequest",
+        expect.objectContaining({ hostedFeature: "pageTranslation" }),
+      )
+    })
   })
 
   describe("executeTranslate", () => {
     const langConfig = {
-      sourceCode: "eng" as const,
-      targetCode: "cmn" as const,
-      detectedCode: "eng" as const,
+      sourceCode: "en" as const,
+      targetCode: "zh-Hans" as const,
+      detectedCode: "en" as const,
       level: "intermediate" as const,
     }
 
     const providerConfig = {
-      id: "microsoft-default",
+      id: "google-default",
       enabled: true,
-      name: "Microsoft Translator",
-      provider: "microsoft-translate" as const,
+      name: "Google Translate",
+      provider: "google-translate" as const,
     }
 
     it("should return empty string for empty/whitespace input", async () => {
@@ -452,7 +624,7 @@ describe("translate-text", () => {
       ).toBe("")
 
       // Should translate valid content after removing zero-width spaces
-      mockMicrosoftTranslate.mockResolvedValue("你好")
+      mockGoogleTranslate.mockResolvedValue("你好")
       const result = await executeTranslate(
         "\u200B hello \u200B",
         langConfig,
@@ -461,13 +633,15 @@ describe("translate-text", () => {
       )
       expect(result).toBe("你好")
       // Shared translation core should send minimally prepared text to the provider
-      expect(mockMicrosoftTranslate).toHaveBeenCalledWith("hello", "en", "zh", {
+      expect(mockGoogleTranslate).toHaveBeenCalledWith("hello", "en", "zh", {
         textFormat: undefined,
+        preserveLineBreaks: undefined,
+        signal: undefined,
       })
     })
 
     it("should trim translation result", async () => {
-      mockMicrosoftTranslate.mockResolvedValue("  测试结果  ")
+      mockGoogleTranslate.mockResolvedValue("  测试结果  ")
 
       const result = await executeTranslate(
         "test input",
@@ -518,7 +692,7 @@ describe("translate-text", () => {
         textFormat: "html",
       })
 
-      expect(mockDeepLTranslate).toHaveBeenCalledWith(html, "en", "zh", deeplProviderConfig, {
+      expect(mockDeepLTranslate).toHaveBeenCalledWith(html, "en", "zh-Hans", deeplProviderConfig, {
         textFormat: "html",
       })
     })
@@ -539,9 +713,15 @@ describe("translate-text", () => {
         textFormat: "html",
       })
 
-      expect(mockDeepLXTranslate).toHaveBeenCalledWith(html, "en", "zh", deeplxProviderConfig, {
-        textFormat: "html",
-      })
+      expect(mockDeepLXTranslate).toHaveBeenCalledWith(
+        html,
+        "en",
+        "zh-Hans",
+        deeplxProviderConfig,
+        {
+          textFormat: "html",
+        },
+      )
     })
   })
 })

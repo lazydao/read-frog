@@ -3,18 +3,28 @@ import process from "node:process"
 import ViteYaml from "@modyfi/vite-plugin-yaml"
 import { defineConfig } from "wxt"
 import { z } from "zod"
+import { escapeNoncharactersPlugin } from "./scripts/escape-noncharacters"
 import {
   createExtensionClientEnvSchema,
   isLocalPackagesEnabled,
+  LOCAL_PACKAGES_DEDUPE,
   resolveExtensionEnv,
 } from "./src/env/shared"
 
 const WXT_API_KEY_PATTERN = /^WXT_.*API_KEY/
+// entrypoints/content-runtime, the ES module behind every page's content scripts
+const CONTENT_RUNTIME_NAME = "content-runtime"
 const ALLOWED_BUNDLED_API_KEYS = new Set(["WXT_POSTHOG_API_KEY"])
 const useLocalPackages = isLocalPackagesEnabled(process.env)
 // This fork has no hosted service environment. Keep local builds zero-config while
 // allowing release maintainers to opt back into strict validation when needed.
 const shouldSkipEnvValidation = process.env.WXT_VALIDATE_ENV !== "true"
+// Root of the read-frog monorepo whose source is aliased in when developing
+// with local packages. Defaults to the sibling checkout; override with
+// WXT_MONOREPO_PATH to point at a git worktree (relative or absolute).
+const monorepoRoot = process.env.WXT_MONOREPO_PATH
+  ? path.resolve(process.env.WXT_MONOREPO_PATH)
+  : path.resolve(__dirname, "../read-frog-monorepo")
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
@@ -25,14 +35,9 @@ export default defineConfig({
   // WXT top level alias - will be automatically synced to tsconfig.json paths and Vite alias
   alias: useLocalPackages
     ? {
-        "@read-frog/definitions": path.resolve(
-          __dirname,
-          "../read-frog-monorepo/packages/definitions/src",
-        ),
-        "@read-frog/api-contract": path.resolve(
-          __dirname,
-          "../read-frog-monorepo/packages/api-contract/src",
-        ),
+        "@read-frog/definitions": path.resolve(monorepoRoot, "packages/definitions/src"),
+        "@read-frog/api-contract": path.resolve(monorepoRoot, "packages/api-contract/src"),
+        "@read-frog/layout-engine": path.resolve(monorepoRoot, "packages/layout-engine/src"),
       }
     : {},
   manifest: ({ mode, browser }) => ({
@@ -55,6 +60,16 @@ export default defineConfig({
         resources: ["assets/*.png", "assets/*.svg", "assets/*.webp"],
         matches: ["*://*/*", "file:///*"],
       },
+      // The shared content runtime the loader content script imports, and its
+      // chunks. No `use_dynamic_url`: Chrome 130 and 131 block a content
+      // script's import() of a dynamic URL with the content script CSP
+      // (crbug.com/363027634, fixed in 132), so nothing would load there. The
+      // chunks couldn't use one anyway, since Chrome resolves a module's
+      // relative imports against the extension's static id.
+      {
+        resources: [`${CONTENT_RUNTIME_NAME}.js`, `${CONTENT_RUNTIME_NAME}/*`],
+        matches: ["*://*/*", "file:///*"],
+      },
     ],
     // Firefox-specific settings for MV3
     ...(browser === "firefox" && {
@@ -66,7 +81,7 @@ export default defineConfig({
       browser_specific_settings: {
         gecko: {
           id: "{bd311a81-4530-4fcc-9178-74006155461b}",
-          strict_min_version: "112.0",
+          strict_min_version: "140.0",
           data_collection_permissions: {
             required: ["none"],
             optional: ["technicalAndInteraction"],
@@ -77,8 +92,51 @@ export default defineConfig({
   }),
   zip: {
     name: "transfrog",
-    includeSources: [".env.production"],
+    includeSources: ["**/*", ".env.production"],
     excludeSources: ["docs/**/*", "assets/**/*", "repos/**/*", "readmes/**/*"],
+  },
+  hooks: {
+    // With local packages the bundle holds @read-frog/layout-engine's readable
+    // source, which must never leave this machine.
+    "zip:start": () => {
+      if (useLocalPackages) throw new Error("Do not zip a build made with local packages")
+    },
+    "vite:build:extendConfig": (entrypoints, viteConfig) => {
+      const entrypoint = entrypoints.length === 1 ? entrypoints[0] : undefined
+      if (entrypoint?.type === "unlisted-script" && entrypoint.name === CONTENT_RUNTIME_NAME) {
+        // WXT builds every script as one IIFE. The content runtime is imported
+        // as an ES module instead, so it can leave code (such as the locales
+        // it doesn't use) in chunks that load when needed.
+        if (viteConfig.build?.lib) viteConfig.build.lib.formats = ["es"]
+        const output = viteConfig.build?.rollupOptions?.output
+        for (const outputOptions of Array.isArray(output) ? output : output ? [output] : []) {
+          outputOptions.chunkFileNames = `${CONTENT_RUNTIME_NAME}/[name]-[hash].js`
+          outputOptions.assetFileNames = "assets/[name]-[hash].[ext]"
+          // Vite keeps whitespace and pure annotations in ES library output for
+          // the bundlers that would consume it; nothing bundles this one again.
+          if (viteConfig.build?.minify !== false) {
+            outputOptions.minify = true
+            outputOptions.comments = false
+          }
+        }
+        return
+      }
+      if (entrypoint?.type !== "content-script") return
+
+      // Chrome loads a content script file only if it holds no Unicode
+      // noncharacter, which Temml's lexer has (see escape-noncharacters).
+      viteConfig.plugins = [...(viteConfig.plugins ?? []), escapeNoncharactersPlugin()]
+
+      const output = viteConfig.build?.rollupOptions?.output
+      if (!output) return
+
+      for (const outputOptions of Array.isArray(output) ? output : [output]) {
+        outputOptions.assetFileNames = (assetInfo) =>
+          assetInfo.names.some((name) => name.endsWith(".css"))
+            ? `content-scripts/${entrypoint.name}.[ext]`
+            : "assets/[name]-[hash].[ext]"
+      }
+    },
   },
   dev: {
     server: {
@@ -101,6 +159,10 @@ export default defineConfig({
         "@codemirror/search",
         "@codemirror/commands",
         "@lezer/common",
+        // @codemirror/lang-liquid's parser and highlighting share these with the other languages.
+        "@lezer/highlight",
+        "@lezer/lr",
+        ...(useLocalPackages ? LOCAL_PACKAGES_DEDUPE : []),
       ],
     },
     plugins: [

@@ -33,9 +33,15 @@ export function Thinking({ status, content, defaultExpanded = false, className }
   )
   const triggerClassName =
     "flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-xs"
-  const thinkingIconClassName = cn(
-    "shrink-0",
-    isThinking ? "text-primary" : "text-muted-foreground",
+  // The morphing glyph and the shimmering label already carry the "in progress"
+  // signal; tinting the icon on top of them only competes with it.
+  const thinkingIconClassName = "shrink-0 text-muted-foreground"
+  // `shimmer` sweeps a highlight across the glyphs, taking the surrounding
+  // muted-foreground as its base; pointing the highlight at `foreground` is what
+  // makes the sweep visible against it.
+  const statusLabelClassName = cn(
+    "font-medium tracking-[0.01em]",
+    isThinking && "shimmer shimmer-color-foreground shimmer-duration-1500",
   )
 
   useEffect(() => {
@@ -61,6 +67,7 @@ export function Thinking({ status, content, defaultExpanded = false, className }
     return () => {
       cancelAnimationFrame(frame)
     }
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- the dependencies are re-run triggers, not values the effect body reads
   }, [open, trimmedContent])
 
   const handleContentScroll = () => {
@@ -81,7 +88,7 @@ export function Thinking({ status, content, defaultExpanded = false, className }
         <div className={triggerClassName}>
           <span className="flex min-w-0 items-center gap-2">
             <ThinkingIcon animated={isThinking} className={thinkingIconClassName} />
-            <span className="font-medium tracking-[0.01em]">{statusLabel}</span>
+            <span className={statusLabelClassName}>{statusLabel}</span>
           </span>
         </div>
       </div>
@@ -96,7 +103,7 @@ export function Thinking({ status, content, defaultExpanded = false, className }
       >
         <span className="flex min-w-0 items-center gap-2">
           <ThinkingIcon animated={isThinking} className={thinkingIconClassName} />
-          <span className="font-medium tracking-[0.01em]">{statusLabel}</span>
+          <span className={statusLabelClassName}>{statusLabel}</span>
         </span>
         <IconChevronDown
           className={cn(
@@ -105,14 +112,18 @@ export function Thinking({ status, content, defaultExpanded = false, className }
           )}
         />
       </CollapsibleTrigger>
-      <CollapsibleContent
-        ref={contentRef}
-        className="max-h-32 overflow-y-auto px-3 pb-2.5"
-        onScroll={handleContentScroll}
-      >
-        <p className="text-xs [overflow-wrap:anywhere] break-words whitespace-pre-wrap text-muted-foreground">
-          {trimmedContent}
-        </p>
+      <CollapsibleContent>
+        {/* Scrolls inside the panel, not on it: Base UI holds a closing panel open until its
+            own animations finish, and the fade's scroll-driven ones only finish at the end. */}
+        <div
+          ref={contentRef}
+          className="max-h-32 overflow-y-auto px-3 pb-2.5 scroll-driven:scroll-fade"
+          onScroll={handleContentScroll}
+        >
+          <p className="text-xs [overflow-wrap:anywhere] break-words whitespace-pre-wrap text-muted-foreground">
+            {trimmedContent}
+          </p>
+        </div>
       </CollapsibleContent>
     </Collapsible>
   )

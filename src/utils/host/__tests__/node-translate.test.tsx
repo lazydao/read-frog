@@ -10,6 +10,7 @@ import {
   PARAGRAPH_ATTRIBUTE,
 } from "@/utils/constants/dom-labels"
 import { flushBatchedOperations } from "../dom/batch-dom"
+import { findNearestAncestorBlockNodeAt } from "../dom/find"
 import { removeOrShowNodeTranslation } from "../translate/node-manipulation"
 import {
   expectNodeLabels,
@@ -21,8 +22,8 @@ import {
 // Test config with fixed bilingual mode - won't change with DEFAULT_CONFIG
 const TEST_CONFIG: Config = {
   ...DEFAULT_CONFIG,
-  translate: {
-    ...DEFAULT_CONFIG.translate,
+  pageTranslation: {
+    ...DEFAULT_CONFIG.pageTranslation,
     mode: "bilingual" as const,
   },
 }
@@ -35,14 +36,28 @@ vi.mock("@/utils/host/translate/translate-text", () => ({
   validateTranslationConfigAndToast: vi.fn<(...args: any[]) => any>(() => true),
 }))
 
+vi.mock("@/utils/config/storage", () => ({
+  getLocalConfig: vi.fn<(...args: any[]) => any>(),
+}))
+
 vi.mock("@/utils/config/languages", () => ({
   getDetectedCodeFromStorage: vi.fn<(...args: any[]) => any>(() => Promise.resolve("eng")),
 }))
 
+// What a hover-translation trigger does: find the block under the pointer, then translate it.
+async function translateAt(point: { x: number; y: number }, config: Config) {
+  const block = findNearestAncestorBlockNodeAt(point, config)
+  if (block) await removeOrShowNodeTranslation(block, config)
+}
+
 describe("node translation", () => {
   const originalGetComputedStyle = window.getComputedStyle
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    // Mock getLocalConfig to return TEST_CONFIG with bilingual mode
+    const { getLocalConfig } = await import("@/utils/config/storage")
+    vi.mocked(getLocalConfig).mockResolvedValue(TEST_CONFIG)
+
     window.getComputedStyle = vi.fn<(...args: any[]) => any>((element) => {
       const originalStyle = originalGetComputedStyle(element)
       if (originalStyle.float === "") {
@@ -67,7 +82,7 @@ describe("node translation", () => {
       const originalElementFromPoint = Reflect.get(document, "elementFromPoint")
       document.elementFromPoint = vi.fn<(...args: any[]) => any>(() => node)
       await act(async () => {
-        await removeOrShowNodeTranslation({ x: 150, y: 125 }, TEST_CONFIG)
+        await translateAt({ x: 150, y: 125 }, TEST_CONFIG)
         // Flush batched DOM operations to ensure all changes are applied before assertions
         flushBatchedOperations()
       })
@@ -79,6 +94,86 @@ describe("node translation", () => {
 
       document.elementFromPoint = originalElementFromPoint
     })
+
+    it("applies site-rule CSS while a node translation is visible", async () => {
+      const config = structuredClone(TEST_CONFIG)
+      config.siteRules = {
+        disabledBuiltInRules: [],
+        userRules: [
+          {
+            id: "node-translation-layout",
+            matches: window.location.hostname,
+            injectedCss: ".clamped-title { max-height: none !important; }",
+          },
+        ],
+      }
+
+      render(<div data-testid="test-node">{MOCK_ORIGINAL_TEXT}</div>)
+      const node = screen.getByTestId("test-node")
+      const originalElementFromPoint = Reflect.get(document, "elementFromPoint")
+      document.elementFromPoint = vi.fn<(...args: any[]) => any>(() => node)
+
+      await act(async () => {
+        await translateAt({ x: 150, y: 125 }, config)
+        flushBatchedOperations()
+      })
+
+      const siteRuleStyle = document.head.querySelector<HTMLStyleElement>(
+        "#read-frog-site-rule-styles",
+      )
+      expect(siteRuleStyle?.textContent).toContain(".clamped-title")
+
+      const wrapper = node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)
+      document.elementFromPoint = vi.fn<(...args: any[]) => any>(() => wrapper as Element)
+      await act(async () => {
+        await translateAt({ x: 150, y: 125 }, config)
+        flushBatchedOperations()
+      })
+
+      expect(document.head.querySelector("#read-frog-site-rule-styles")).toBeNull()
+      document.elementFromPoint = originalElementFromPoint
+    })
+
+    it("removes stale site-rule CSS when the current rule has no CSS", async () => {
+      const configWithCSS = structuredClone(TEST_CONFIG)
+      configWithCSS.siteRules = {
+        disabledBuiltInRules: [],
+        userRules: [
+          {
+            id: "node-translation-layout",
+            matches: window.location.hostname,
+            injectedCss: ".clamped-title { max-height: none !important; }",
+          },
+        ],
+      }
+      const configWithoutCSS = structuredClone(TEST_CONFIG)
+      configWithoutCSS.siteRules = {
+        disabledBuiltInRules: [],
+        userRules: [],
+      }
+
+      render(<div data-testid="test-node">{MOCK_ORIGINAL_TEXT}</div>)
+      const node = screen.getByTestId("test-node")
+      const originalElementFromPoint = Reflect.get(document, "elementFromPoint")
+      document.elementFromPoint = vi.fn<(...args: any[]) => any>(() => node)
+
+      await act(async () => {
+        await translateAt({ x: 150, y: 125 }, configWithCSS)
+        flushBatchedOperations()
+      })
+
+      expect(document.head.querySelector("#read-frog-site-rule-styles")).not.toBeNull()
+
+      const wrapper = node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)
+      document.elementFromPoint = vi.fn<(...args: any[]) => any>(() => wrapper as Element)
+      await act(async () => {
+        await translateAt({ x: 150, y: 125 }, configWithoutCSS)
+        flushBatchedOperations()
+      })
+
+      expect(document.head.querySelector("#read-frog-site-rule-styles")).toBeNull()
+      document.elementFromPoint = originalElementFromPoint
+    })
   })
   describe("hide translation", () => {
     it("should hide the translation when point is over the translation content node", async () => {
@@ -88,14 +183,14 @@ describe("node translation", () => {
       const originalElementFromPoint = Reflect.get(document, "elementFromPoint")
       document.elementFromPoint = vi.fn<(...args: any[]) => any>(() => node)
       await act(async () => {
-        await removeOrShowNodeTranslation({ x: 150, y: 125 }, TEST_CONFIG)
+        await translateAt({ x: 150, y: 125 }, TEST_CONFIG)
         flushBatchedOperations()
       })
 
       const translatedContent = node.querySelector(`.${BLOCK_CONTENT_CLASS}`)
       document.elementFromPoint = vi.fn<(...args: any[]) => any>(() => translatedContent as Element)
       await act(async () => {
-        await removeOrShowNodeTranslation({ x: 150, y: 125 }, TEST_CONFIG)
+        await translateAt({ x: 150, y: 125 }, TEST_CONFIG)
         flushBatchedOperations()
       })
 
@@ -110,13 +205,13 @@ describe("node translation", () => {
       const originalElementFromPoint = Reflect.get(document, "elementFromPoint")
       document.elementFromPoint = vi.fn<(...args: any[]) => any>(() => node)
       await act(async () => {
-        await removeOrShowNodeTranslation({ x: 150, y: 125 }, TEST_CONFIG)
+        await translateAt({ x: 150, y: 125 }, TEST_CONFIG)
         flushBatchedOperations()
       })
       const wrapper = node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)
       document.elementFromPoint = vi.fn<(...args: any[]) => any>(() => wrapper as Element)
       await act(async () => {
-        await removeOrShowNodeTranslation({ x: 150, y: 125 }, TEST_CONFIG)
+        await translateAt({ x: 150, y: 125 }, TEST_CONFIG)
         flushBatchedOperations()
       })
 

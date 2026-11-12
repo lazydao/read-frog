@@ -17,12 +17,22 @@ describe("analytics compatibility helpers", () => {
         outcome: "success",
         startedAt: 0,
         finishedAt: 1_500,
+        provider: "openai",
+        backend_kind: "llm",
+        translation_mode: "bilingual",
+        target_language: "zh-Hans",
+        source_language: "ja",
       }),
     ).toEqual({
       feature: ANALYTICS_FEATURE.PAGE_TRANSLATION,
       surface: ANALYTICS_SURFACE.POPUP,
       outcome: "success",
       latency_ms: 1_500,
+      provider: "openai",
+      backend_kind: "llm",
+      translation_mode: "bilingual",
+      target_language: "zh-Hans",
+      source_language: "ja",
     })
   })
 
@@ -33,6 +43,11 @@ describe("analytics compatibility helpers", () => {
         surface: ANALYTICS_SURFACE.POPUP,
         outcome: "success",
         startedAt: 0,
+        provider: "openai",
+        backend_kind: "llm",
+        translation_mode: "bilingual",
+        target_language: "zh-Hans",
+        source_language: "ja",
       }),
     ).resolves.toBeUndefined()
   })

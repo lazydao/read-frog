@@ -1,26 +1,30 @@
 import type {
-  AnalyticsOutcome,
-  AnalyticsSurface,
+  AnalyticsFeature,
   FeatureUsageContext,
   FeatureUsedEventProperties,
+  SurfaceByFeature,
 } from "@/types/analytics"
+import { classifyFailureReason } from "@/utils/analytics-failure-reason"
 
-export interface FeatureUsedEventInput extends FeatureUsageContext {
-  outcome: AnalyticsOutcome
-  finishedAt?: number
-}
+type WithTiming<T> = T extends unknown
+  ? Omit<T, "latency_ms"> & { startedAt: number; finishedAt?: number }
+  : never
+type WithoutOutcome<T> = T extends unknown ? Omit<T, "outcome" | "finishedAt"> : never
 
-export function createFeatureUsageContext(
-  feature: FeatureUsageContext["feature"],
-  surface: AnalyticsSurface,
+export type FeatureUsedEventInput = WithTiming<FeatureUsedEventProperties>
+
+/** Everything `trackFeatureUsed` needs except the outcome, which the attempt decides. */
+export type FeatureAttemptInput = WithoutOutcome<FeatureUsedEventInput>
+
+export function createFeatureUsageContext<F extends AnalyticsFeature>(
+  feature: F,
+  surface: SurfaceByFeature[NoInfer<F>],
   startedAt = Date.now(),
-  metadata?: Pick<FeatureUsageContext, "action_id" | "action_name">,
-): FeatureUsageContext {
+): FeatureUsageContext<F> {
   return {
     feature,
     surface,
     startedAt,
-    ...metadata,
   }
 }
 
@@ -28,22 +32,13 @@ export function getLatencyMs(startedAt: number, finishedAt = Date.now()): number
   return Math.max(0, finishedAt - startedAt)
 }
 
-export function buildFeatureUsedEventProperties({
-  feature,
-  surface,
-  outcome,
-  startedAt,
-  finishedAt = Date.now(),
-  action_id,
-  action_name,
-}: FeatureUsedEventInput): FeatureUsedEventProperties {
+export function buildFeatureUsedEventProperties(
+  input: FeatureUsedEventInput,
+): FeatureUsedEventProperties {
+  const { startedAt, finishedAt = Date.now(), ...properties } = input
   return {
-    feature,
-    surface,
-    outcome,
+    ...properties,
     latency_ms: getLatencyMs(startedAt, finishedAt),
-    ...(action_id !== undefined ? { action_id } : {}),
-    ...(action_name !== undefined ? { action_name } : {}),
   }
 }
 
@@ -52,7 +47,7 @@ export async function trackFeatureUsed(input: FeatureUsedEventInput): Promise<vo
 }
 
 export async function trackFeatureAttempt<T>(
-  context: FeatureUsageContext,
+  context: FeatureAttemptInput,
   run: () => Promise<T>,
 ): Promise<T> {
   try {
@@ -66,6 +61,7 @@ export async function trackFeatureAttempt<T>(
     void trackFeatureUsed({
       ...context,
       outcome: "failure",
+      failure_reason: classifyFailureReason(error),
     })
     throw error
   }

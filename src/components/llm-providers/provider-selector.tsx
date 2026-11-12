@@ -1,6 +1,7 @@
 import type { ComponentProps } from "react"
 import type { Theme } from "@/types/config/theme"
 import type { ProviderSelectorOption } from "@/utils/providers/provider-display"
+import { UpgradePlanBadge } from "@/components/badges/upgrade-plan-badge"
 import ProviderIcon from "@/components/provider-icon"
 import {
   Select,
@@ -16,7 +17,8 @@ import { i18n } from "@/utils/i18n"
 import {
   getProviderLogo,
   getProviderName,
-  isProviderSelectorItem,
+  isProviderSelectorOptionDisabled,
+  isSystemProviderSelectorItem,
 } from "@/utils/providers/provider-display"
 import { useTheme } from "../providers/theme-provider"
 
@@ -37,31 +39,59 @@ interface ProviderSelectorProps {
   onChange: (id: string) => void
   placeholder?: string
   className?: string
+  /** Applied to the selected provider's name in the trigger, not to the list items. */
+  triggerNameClassName?: string
   triggerSize?: ProviderSelectorTriggerSize
   selectContentProps?: Pick<
     ComponentProps<typeof SelectContent>,
-    "container" | "positionerClassName"
+    "container" | "positionerClassName" | "align"
   >
 }
 
 export function getProviderSelectorGroups(
   providers: ProviderSelectorOption[],
 ): ProviderSelectorGroup[] {
-  const builtInProviders = providers.filter(isProviderSelectorItem)
+  const builtInProviders = providers.filter(isSystemProviderSelectorItem)
   const llmProviders = providers.filter(
-    (provider) => !isProviderSelectorItem(provider) && isLLMProviderConfig(provider),
+    (provider) => !isSystemProviderSelectorItem(provider) && isLLMProviderConfig(provider),
   )
   const pureTranslateProviders = providers.filter(
-    (provider) => !isProviderSelectorItem(provider) && isPureTranslateProviderConfig(provider),
+    (provider) =>
+      !isSystemProviderSelectorItem(provider) && isPureTranslateProviderConfig(provider),
   )
 
+  // Built-in models sit last: the user's own configured providers are the
+  // primary choice, the hosted fallback the closing offer.
   const groups: ProviderSelectorGroup[] = [
-    { labelKey: "translateService.builtInModels", providers: builtInProviders },
     { labelKey: "translateService.llmModels", providers: llmProviders },
     { labelKey: "translateService.normalTranslator", providers: pureTranslateProviders },
+    { labelKey: "translateService.builtInModels", providers: builtInProviders },
   ]
 
   return groups.filter((group) => group.providers.length > 0)
+}
+
+function ProviderOptionContent({
+  provider,
+  theme,
+  tooltipContainer,
+}: {
+  provider: ProviderSelectorOption
+  theme: Theme
+  tooltipContainer?: ComponentProps<typeof UpgradePlanBadge>["tooltipContainer"]
+}) {
+  const upgradeTo = isSystemProviderSelectorItem(provider) ? provider.upgradeTo : undefined
+
+  return (
+    <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+      <ProviderIcon
+        logo={getProviderLogo(provider, theme)}
+        name={getProviderName(provider)}
+        size="sm"
+      />
+      {upgradeTo && <UpgradePlanBadge plan={upgradeTo} tooltipContainer={tooltipContainer} />}
+    </div>
+  )
 }
 
 export default function ProviderSelector({
@@ -70,6 +100,7 @@ export default function ProviderSelector({
   onChange,
   placeholder,
   className,
+  triggerNameClassName,
   triggerSize = "default",
   selectContentProps,
 }: ProviderSelectorProps) {
@@ -85,6 +116,7 @@ export default function ProviderSelector({
         onChange={onChange}
         placeholder={placeholder}
         className={className}
+        triggerNameClassName={triggerNameClassName}
         triggerSize={triggerSize}
         selectContentProps={selectContentProps}
         theme={theme}
@@ -99,6 +131,7 @@ export default function ProviderSelector({
       onChange={onChange}
       placeholder={placeholder}
       className={className}
+      triggerNameClassName={triggerNameClassName}
       triggerSize={triggerSize}
       selectContentProps={selectContentProps}
       theme={theme}
@@ -112,6 +145,7 @@ function GroupedSelect({
   onChange,
   placeholder,
   className,
+  triggerNameClassName,
   triggerSize,
   theme,
   selectContentProps,
@@ -121,10 +155,11 @@ function GroupedSelect({
   onChange: (id: string) => void
   placeholder?: string
   className?: string
+  triggerNameClassName?: string
   triggerSize: ProviderSelectorTriggerSize
   selectContentProps?: Pick<
     ComponentProps<typeof SelectContent>,
-    "container" | "positionerClassName"
+    "container" | "positionerClassName" | "align"
   >
   theme: Theme
 }) {
@@ -144,20 +179,25 @@ function GroupedSelect({
               logo={getProviderLogo(provider, theme)}
               name={getProviderName(provider)}
               size="sm"
+              textClassName={triggerNameClassName}
             />
           )}
         </SelectValue>
       </SelectTrigger>
-      <SelectContent className="min-w-fit" {...selectContentProps}>
+      <SelectContent {...selectContentProps}>
         {providerGroups.map((group) => (
           <SelectGroup key={group.labelKey}>
             <SelectLabel>{i18n.t(group.labelKey)}</SelectLabel>
             {group.providers.map((provider) => (
-              <SelectItem key={provider.id} value={provider}>
-                <ProviderIcon
-                  logo={getProviderLogo(provider, theme)}
-                  name={getProviderName(provider)}
-                  size="sm"
+              <SelectItem
+                key={provider.id}
+                value={provider}
+                disabled={isProviderSelectorOptionDisabled(provider)}
+              >
+                <ProviderOptionContent
+                  provider={provider}
+                  theme={theme}
+                  tooltipContainer={selectContentProps?.container}
                 />
               </SelectItem>
             ))}
@@ -174,6 +214,7 @@ function UngroupedSelect({
   onChange,
   placeholder,
   className,
+  triggerNameClassName,
   triggerSize,
   theme,
   selectContentProps,
@@ -183,10 +224,11 @@ function UngroupedSelect({
   onChange: (id: string) => void
   placeholder?: string
   className?: string
+  triggerNameClassName?: string
   triggerSize: ProviderSelectorTriggerSize
   selectContentProps?: Pick<
     ComponentProps<typeof SelectContent>,
-    "container" | "positionerClassName"
+    "container" | "positionerClassName" | "align"
   >
   theme: Theme
 }) {
@@ -207,18 +249,23 @@ function UngroupedSelect({
               logo={getProviderLogo(provider, theme)}
               name={getProviderName(provider)}
               size="sm"
+              textClassName={triggerNameClassName}
             />
           )}
         </SelectValue>
       </SelectTrigger>
-      <SelectContent className="min-w-fit" {...selectContentProps}>
+      <SelectContent {...selectContentProps}>
         <SelectGroup>
           {providers.map((provider) => (
-            <SelectItem key={provider.id} value={provider}>
-              <ProviderIcon
-                logo={getProviderLogo(provider, theme)}
-                name={getProviderName(provider)}
-                size="sm"
+            <SelectItem
+              key={provider.id}
+              value={provider}
+              disabled={isProviderSelectorOptionDisabled(provider)}
+            >
+              <ProviderOptionContent
+                provider={provider}
+                theme={theme}
+                tooltipContainer={selectContentProps?.container}
               />
             </SelectItem>
           ))}

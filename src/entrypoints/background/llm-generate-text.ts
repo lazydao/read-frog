@@ -2,23 +2,16 @@ import type {
   BackgroundGenerateTextPayload,
   BackgroundGenerateTextResponse,
 } from "@/types/background-generate-text"
-import { generateText } from "ai"
+import { validateProviderHostedFeature } from "@/utils/hosted-ai/routing"
 import { logger } from "@/utils/logger"
 import { onMessage } from "@/utils/message"
-import { getModelById } from "@/utils/providers/model"
+import { generateTextForProviderRef } from "./background-stream"
 
 export async function runGenerateTextInBackground(
   payload: BackgroundGenerateTextPayload,
 ): Promise<BackgroundGenerateTextResponse> {
-  const { providerId, ...generateTextParams } = payload
-  const model = await getModelById(providerId)
-
-  const { text } = await generateText({
-    ...generateTextParams,
-    model,
-  })
-
-  return { text }
+  validateProviderHostedFeature(payload.providerRef, payload.hostedFeature)
+  return { text: await generateTextForProviderRef(payload) }
 }
 
 export function setupLLMGenerateTextMessageHandlers() {

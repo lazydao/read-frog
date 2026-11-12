@@ -1,4 +1,6 @@
 import type { Config } from "@/types/config/config"
+import type { WorkPacer } from "@/utils/scheduler"
+import { createWorkPacer, pauseIfBudgetSpent } from "@/utils/scheduler"
 import {
   BLOCK_ATTRIBUTE,
   CONTENT_WRAPPER_CLASS,
@@ -6,7 +8,14 @@ import {
   TRANSLATION_ONLY_ATTRIBUTE,
   WALKED_ATTRIBUTE,
 } from "../../../constants/dom-labels"
-import { isBlockTransNode, isHTMLElement, isTextNode, isTransNode } from "../../dom/filter"
+import {
+  isBlockTransNode,
+  isHTMLElement,
+  isNaturalBlockTransNode,
+  isSiteRuleForceBlockStyleElement,
+  isTextNode,
+  isTransNode,
+} from "../../dom/filter"
 import { translateNodes } from "./translation-modes"
 import { getTranslationOnlyAnchorState } from "./translation-state"
 
@@ -33,7 +42,22 @@ export async function translateWalkedElement(
   walkId: string,
   config: Config,
   toggle: boolean = false,
+  pacer: WorkPacer = createWorkPacer(),
+  // Liveness gate re-checked after every yield. Because pacing spreads a giant
+  // subtree's expansion across seconds, a session cancelled mid-expansion must
+  // stop here — the WALKED attribute alone does not (stop() never strips it),
+  // so without this the walk keeps inserting wrappers/spinners into the page
+  // the user just cleared (#1881).
+  shouldContinue: () => boolean = () => true,
+  forceRetranslation: boolean = false,
 ): Promise<void> {
+  // Self-pacing: a giant observed subtree (a flat article can label as ONE
+  // huge paragraph unit, #1881) must not expand into thousands of wrapper
+  // insertions in a single task. Intersection-callback batches share one
+  // pacer so a burst of entries is throttled globally.
+  await pauseIfBudgetSpent(pacer)
+  if (!shouldContinue()) return
+
   // Translated regions are skipped on non-toggle walks. In-place-swapped
   // paragraphs leave no wrapper, so also check the anchor marker attribute.
   if (
@@ -50,11 +74,19 @@ export async function translateWalkedElement(
 
   if (element.hasAttribute(PARAGRAPH_ATTRIBUTE)) {
     let hasBlockNodeChild = false
+    let hasBlockLayoutChild = false
 
     for (const child of element.childNodes) {
-      if (isHTMLElement(child) && child.hasAttribute(BLOCK_ATTRIBUTE)) {
-        hasBlockNodeChild = true
-        break
+      if (isHTMLElement(child)) {
+        if (child.hasAttribute(BLOCK_ATTRIBUTE)) {
+          hasBlockNodeChild = true
+        }
+        if (
+          isNaturalBlockTransNode(child) ||
+          (child.hasAttribute(BLOCK_ATTRIBUTE) && isSiteRuleForceBlockStyleElement(child, config))
+        ) {
+          hasBlockLayoutChild = true
+        }
       }
     }
 
@@ -62,38 +94,87 @@ export async function translateWalkedElement(
     const isFlexParent = computedStyle.display.includes("flex")
 
     if (!hasBlockNodeChild) {
-      promises.push(translateNodes([element], walkId, toggle, config))
+      promises.push(translateNodes([element], walkId, toggle, config, false, forceRetranslation))
     } else {
       // prevent children change during iteration
       const children = [...element.childNodes]
       let consecutiveInlineNodes: ChildNode[] = []
       for (const child of children) {
         if (isTransNode(child) && isBlockTransNode(child) && !isTextNode(child)) {
-          // force the children to be block translation style unless the parent is a flex parent
+          // A Node-only forced block may split the translation run without
+          // changing wrapper layout. Natural block children and the combined
+          // Node+Style shape produced by legacy force-block migration retain
+          // the old group-level block wrapper hint.
           promises.push(
-            translateNodes(consecutiveInlineNodes, walkId, toggle, config, !isFlexParent),
+            translateNodes(
+              consecutiveInlineNodes,
+              walkId,
+              toggle,
+              config,
+              !isFlexParent && hasBlockLayoutChild,
+              forceRetranslation,
+            ),
           )
           consecutiveInlineNodes = []
-          promises.push(translateWalkedElement(child, walkId, config, toggle))
+          promises.push(
+            translateWalkedElement(
+              child,
+              walkId,
+              config,
+              toggle,
+              pacer,
+              shouldContinue,
+              forceRetranslation,
+            ),
+          )
         } else {
           consecutiveInlineNodes.push(child)
         }
       }
 
       if (consecutiveInlineNodes.length) {
-        promises.push(translateNodes(consecutiveInlineNodes, walkId, toggle, config, !isFlexParent))
+        promises.push(
+          translateNodes(
+            consecutiveInlineNodes,
+            walkId,
+            toggle,
+            config,
+            !isFlexParent && hasBlockLayoutChild,
+            forceRetranslation,
+          ),
+        )
       }
     }
   } else {
     for (const child of element.childNodes) {
       if (isHTMLElement(child)) {
-        promises.push(translateWalkedElement(child, walkId, config, toggle))
+        promises.push(
+          translateWalkedElement(
+            child,
+            walkId,
+            config,
+            toggle,
+            pacer,
+            shouldContinue,
+            forceRetranslation,
+          ),
+        )
       }
     }
     if (element.shadowRoot) {
       for (const child of element.shadowRoot.children) {
         if (isHTMLElement(child)) {
-          promises.push(translateWalkedElement(child, walkId, config, toggle))
+          promises.push(
+            translateWalkedElement(
+              child,
+              walkId,
+              config,
+              toggle,
+              pacer,
+              shouldContinue,
+              forceRetranslation,
+            ),
+          )
         }
       }
     }

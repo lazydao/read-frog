@@ -1,4 +1,4 @@
-import type { ORPCRouterClient } from "@read-frog/api-contract"
+import type { ExtensionORPCClient, ExtensionORPCClientContext } from "./client-context"
 import { createORPCClient } from "@orpc/client"
 import { RPCLink } from "@orpc/client/fetch"
 import { createTanstackQueryUtils } from "@orpc/tanstack-query"
@@ -6,18 +6,18 @@ import { ORPC_PREFIX } from "@read-frog/definitions"
 import { env } from "@/env"
 import { normalizeHeaders } from "../http"
 import { sendMessage } from "../message"
+import { buildExtensionORPCHeaders } from "./client-context"
 
-const link = new RPCLink({
+const link = new RPCLink<ExtensionORPCClientContext>({
   url: `${env.WXT_API_URL}${ORPC_PREFIX}`,
-  headers: {
-    "x-orpc-source": "extension",
-  },
+  headers: ({ context }) => buildExtensionORPCHeaders(context),
   // Proxy fetch through background to avoid CORS in content scripts
   fetch: async (request, init) => {
     const url = request.url
     const method = request.method
     const headerEntries = normalizeHeaders(request.headers)
-    const body = request.body ? await request.text() : undefined
+    const text = await request.text()
+    const body = text.length > 0 ? text : undefined
 
     const resp = await sendMessage("backgroundFetch", {
       url,
@@ -36,5 +36,5 @@ const link = new RPCLink({
   },
 })
 
-export const orpcClient: ORPCRouterClient = createORPCClient(link)
+export const orpcClient: ExtensionORPCClient = createORPCClient(link)
 export const orpc = createTanstackQueryUtils(orpcClient)

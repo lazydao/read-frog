@@ -4,24 +4,39 @@ export const FETCH_CHECK_INTERVAL = 100
 export const FETCH_SUBTITLES_TIMEOUT = 10_000
 export const MAX_GAP_MS = 2_000
 export const PAUSE_TIMEOUT_MS = 1_000
+export const PLAYER_WATCH_POLL_INTERVAL_MS = 1000
+// How long the pointer rests on the subtitles before pause-on-hover pauses the video,
+// so a pointer passing over them on its way to the controls does not.
+export const HOVER_PAUSE_DELAY_MS = 500
+// A subtitle host can drop a request and answer the next, so a file is asked for this often.
+export const TRACK_FETCH_ATTEMPTS = 3
+export const TRACK_FETCH_RETRY_DELAY_MS = 500
 
 // Segmentation constants
 export const MAX_WORDS = 15
 export const MAX_CHARS_CJK = 30
 export const SENTENCE_END_PATTERN = /[,.。?？！!；;…؟۔\n]$/
+export const MIN_STANDALONE_CUE_DURATION_MS = 1000
 
 // On-demand translation constants
 export const TRANSLATION_BATCH_SIZE = 5
 export const TRANSLATE_LOOK_AHEAD_MS = 30_000
 export const PROCESS_LOOK_AHEAD_MS = 60_000
+export const MAX_LOOKAHEAD_RATE = 4
 
 // DOM IDs
 export const READ_FROG_SUBTITLES_UI_HOST_ID = "read-frog-subtitles-ui-host"
 export const TRANSLATE_BUTTON_CONTAINER_ID = "read-frog-subtitles-translate-button-container"
+export const SUBTITLES_SIDEBAR_HOST_ID = "read-frog-subtitles-sidebar-host"
 export const HIDE_NATIVE_CAPTIONS_STYLE_ID = "read-frog-hide-native-captions"
+
+export const DEFAULT_SUBTITLES_UI_Z_INDEX = 60
 
 // Class names
 export const SUBTITLES_VIEW_CLASS = "read-frog-subtitles-view"
+// The box the two subtitle lines sit in. Everything else about it is Tailwind utilities, but
+// custom CSS needs a name it can hold on to, so this one is part of the public contract.
+export const SUBTITLES_BOX_CLASS = "read-frog-subtitles-box"
 export const STATE_MESSAGE_CLASS = "read-frog-subtitles-state-message"
 export const TRANSLATE_BUTTON_CLASS = "read-frog-subtitles-translate-button"
 
@@ -29,11 +44,14 @@ export const TRANSLATE_BUTTON_CLASS = "read-frog-subtitles-translate-button"
 export const YOUTUBE_WATCH_URL_PATTERN = "youtube.com/watch"
 export const YOUTUBE_EMBED_PATH_PATTERN = /\/embed\/[^/?]+/
 export const YOUTUBE_SHORTS_PATH_PATTERN = /\/shorts\/[^/?]+/
+export const YOUTUBE_LIVE_PATH_PATTERN = /\/live\/[^/?]+/
 export const YOUTUBE_NAVIGATE_START_EVENT = "yt-navigate-start"
 export const YOUTUBE_NAVIGATE_FINISH_EVENT = "yt-navigate-finish"
 export const YOUTUBE_NATIVE_SUBTITLES_CLASS = ".ytp-caption-window-container"
 export const PLAYER_DATA_REQUEST_TYPE = "READ_FROG_GET_PLAYER_DATA"
 export const PLAYER_DATA_RESPONSE_TYPE = "READ_FROG_PLAYER_DATA"
+// The player is on the requested video but has not received its player response yet.
+export const PLAYER_RESPONSE_PENDING_ERROR = "PLAYER_RESPONSE_PENDING"
 export const WAIT_TIMEDTEXT_REQUEST_TYPE = "READ_FROG_WAIT_TIMEDTEXT"
 export const WAIT_TIMEDTEXT_RESPONSE_TYPE = "READ_FROG_TIMEDTEXT_READY"
 export const TIMEDTEXT_WAIT_TIMEOUT_MS = 5000
@@ -41,15 +59,106 @@ export const ENSURE_SUBTITLES_REQUEST_TYPE = "READ_FROG_ENSURE_SUBTITLES"
 export const ENSURE_SUBTITLES_RESPONSE_TYPE = "READ_FROG_ENSURE_SUBTITLES_DONE"
 export const POST_MESSAGE_TIMEOUT_MS = 6000
 
+// TextTrack mechanism
+export const TEXT_TRACK_CUE_WAIT_TIMEOUT_MS = 8000
+export const TEXT_TRACK_CUE_POLL_INTERVAL_MS = 100
+export const TEXT_TRACK_NATIVE_REHIDE_DELAY_MS = 500
+
+// x.com specific
+export const XCOM_PLAYER_CONTAINER_ATTRIBUTE = "data-read-frog-xcom-player-container"
+export const XCOM_CONTROLS_CONTAINER_ATTRIBUTE = "data-read-frog-xcom-controls"
+export const XCOM_PLAYER_CONTAINER_SELECTOR = `[${XCOM_PLAYER_CONTAINER_ATTRIBUTE}="true"]`
+export const XCOM_CONTROLS_CONTAINER_SELECTOR = `[${XCOM_CONTROLS_CONTAINER_ATTRIBUTE}="true"]`
+export const XCOM_STATUS_POLL_INTERVAL_MS = 2000
+export const XCOM_PLAYER_MUTATION_DEBOUNCE_MS = 50
+// x.com renders captions from a partial duplicate track labelled like this.
+export const XCOM_RENDER_TRACK_LABEL = "clone"
+
+// Netflix specific
+export const NETFLIX_WATCH_PATH_PATTERN = /^\/watch\/(\d+)/
+export const NETFLIX_TTML_URL_PATTERN =
+  /^https:\/\/[^/]+\.oca\.nflxvideo\.net\/\?([ovet]=[^=&]+&?){4}$/
+export const NETFLIX_PLAYER_SELECTOR = "[data-uia='player']"
+export const NETFLIX_CONTROLS_SELECTOR = "[data-uia='controls-standard']"
+export const NETFLIX_CONTROLS_GROUP_SELECTOR =
+  "div:has(> div > [data-uia='control-audio-subtitle'])"
+export const NETFLIX_NATIVE_SUBTITLES_SELECTOR = ".player-timedtext"
+export const NETFLIX_SUBTITLES_REQUEST_TYPE = "READ_FROG_NETFLIX_SUBTITLES"
+export const NETFLIX_SUBTITLES_RESPONSE_TYPE = "READ_FROG_NETFLIX_SUBTITLES_DONE"
+// The page script answers "state" and "restore" within this, inside POST_MESSAGE_TIMEOUT_MS.
+export const NETFLIX_PAGE_WAIT_TIMEOUT_MS = 5000
+// The page script answers "load" within this one deadline, which covers waiting for the player
+// and then for its subtitle file.
+export const NETFLIX_LOAD_TIMEOUT_MS = 10_000
+// Outwaits the page's load deadline, with room for its last poll even in a throttled background
+// tab, so a slow load reports how it ended instead of timing out.
+export const NETFLIX_LOAD_POST_MESSAGE_TIMEOUT_MS = NETFLIX_LOAD_TIMEOUT_MS + 2000
+export const NETFLIX_PAGE_POLL_INTERVAL_MS = 100
+export const NETFLIX_WATCH_POLL_INTERVAL_MS = 1000
+export const NETFLIX_TRANSLATE_BUTTON_ZOOM = 1.4
+
+// edX specific
+export const EDX_VIDEO_SELECTOR = ".video[data-metadata]"
+export const EDX_HTML5_VIDEO_SELECTOR = ".video-player video"
+export const EDX_ACTIVE_VIDEO_ATTRIBUTE = "data-read-frog-edx-video"
+export const EDX_ACTIVE_VIDEO_SELECTOR = `[${EDX_ACTIVE_VIDEO_ATTRIBUTE}]`
+export const EDX_PLAYER_SELECTOR = `${EDX_ACTIVE_VIDEO_SELECTOR} .video-wrapper`
+export const EDX_CONTROLS_SELECTOR = ".video-controls"
+export const EDX_CONTROLS_BAR_SELECTOR = `${EDX_ACTIVE_VIDEO_SELECTOR} .secondary-controls`
+export const EDX_NATIVE_SUBTITLES_SELECTOR = `${EDX_ACTIVE_VIDEO_SELECTOR} .closed-captions`
+export const EDX_ACTIVE_LANGUAGE_SELECTOR = ".langs-list .is-active[data-lang-code]"
+export const EDX_LAST_LINE_DURATION_MS = 3000
+
+// Udemy specific
+export const UDEMY_PLAYER_SELECTOR = "[data-purpose='shaka-video-player']"
+export const UDEMY_CONTROLS_SELECTOR = "[data-purpose='video-controls']"
+export const UDEMY_CONTROL_BAR_SELECTOR = "[data-purpose='video-control-bar']"
+export const UDEMY_CAPTIONS_BUTTON_SELECTOR = "[data-purpose='captions-dropdown-button']"
+// The control bar's own `…user-inactive--<hash>` state class, matched on the bar's parent only:
+// other elements always carry a `…hide-when-user-inactive--<hash>` class.
+export const UDEMY_INACTIVE_CONTROLS_SELECTOR = `[class*='--user-inactive--']:has(> ${UDEMY_CONTROLS_SELECTOR})`
+export const UDEMY_NATIVE_SUBTITLES_SELECTOR = "[id$='-captions-display-container']"
+
+// Bilibili specific
+export const BILIBILI_PLAYER_SELECTOR = ".bpx-player-container"
+// The video and its controls, without the danmaku bar the player container also holds below them.
+export const BILIBILI_VIDEO_AREA_SELECTOR = ".bpx-player-video-area"
+export const BILIBILI_CONTROLS_SELECTOR = ".bpx-player-control-wrap"
+export const BILIBILI_CONTROLS_BAR_SELECTOR = ".bpx-player-control-bottom-right"
+// The player's own buttons, which sit at the top of a taller controls row.
+export const BILIBILI_CONTROL_BUTTON_HEIGHT = 22
+export const BILIBILI_NATIVE_SUBTITLES_SELECTOR = ".bpx-player-subtitle-wrap"
+// The player's own signed request; an unsigned one answers with another video's subtitles.
+export const BILIBILI_PLAYER_INFO_URL_PATTERN =
+  /^(?:https:)?\/\/api\.bilibili\.com\/x\/player\/wbi\/v2\?/
+export const BILIBILI_SUBTITLES_REQUEST_TYPE = "READ_FROG_BILIBILI_SUBTITLES"
+export const BILIBILI_SUBTITLES_RESPONSE_TYPE = "READ_FROG_BILIBILI_SUBTITLES_DONE"
+// The page script waits this long for the player to reach the part and report its subtitle list.
+export const BILIBILI_PAGE_WAIT_TIMEOUT_MS = 5000
+// A page script injected after the player asked repeats the player's request once, within this.
+export const BILIBILI_PLAYER_INFO_REFETCH_TIMEOUT_MS = 3000
+// Outwaits the page's wait and its one repeated request, with room for a throttled background tab.
+export const BILIBILI_POST_MESSAGE_TIMEOUT_MS =
+  BILIBILI_PAGE_WAIT_TIMEOUT_MS + BILIBILI_PLAYER_INFO_REFETCH_TIMEOUT_MS + 2000
+export const BILIBILI_PAGE_POLL_INTERVAL_MS = 100
+
 // YouTube player wait constants
 export const MAX_PLAYER_WAIT_ATTEMPTS = 50
 export const PLAYER_WAIT_INTERVAL_MS = 100
+// AdGuard's YouTube rules make a cold load fetch the player response again, which can take
+// well over the wait above; a player already on the video gets this much longer.
+export const MAX_PLAYER_RESPONSE_WAIT_ATTEMPTS = 300
 export const MAX_STATE_WAIT_ATTEMPTS = 20
 export const STATE_WAIT_INTERVAL_MS = 300
 export const MAX_FETCH_RETRIES = 5
 export const FETCH_RETRY_DELAY_MS = 1000
 export const MAX_POT_WAIT_ATTEMPTS = 30
 export const POT_WAIT_INTERVAL_MS = 200
+export const MAX_SELECTED_TRACK_WAIT_ATTEMPTS = 8
+export const SELECTED_TRACK_WAIT_INTERVAL_MS = 100
+
+// Video summary constants
+export const VIDEO_SUMMARY_TRANSCRIPT_CHAR_BUDGET = 24_000
 
 // Subtitle style constants
 export const MIN_FONT_SCALE = 30
@@ -66,9 +175,16 @@ export const DEFAULT_SUBTITLE_COLOR = "#FFFFFF"
 export const DEFAULT_DISPLAY_MODE = "bilingual" as const
 export const DEFAULT_TRANSLATION_POSITION = "above" as const
 export const DEFAULT_CONTROLS_HEIGHT = 60
+export const MAX_CONTROLS_HEIGHT_RATIO = 0.25
 export const DEFAULT_SUBTITLE_POSITION = { percent: 10, anchor: "bottom" } as const
+// Mnemonic for "captions", and it echoes YouTube's own `C` key without taking it over.
+export const DEFAULT_SUBTITLES_TOGGLE_SHORTCUT_KEY = "Alt+C"
 // Subtitle controls sit on top of arbitrary host pages, so keep their theme fixed for readability.
 export const SUBTITLES_THEME = "dark" as const
+
+// Sidebar layout constants
+export const SUBTITLES_SIDEBAR_VIEWPORT_MARGIN = 16
+export const SUBTITLES_SIDEBAR_WIDTH = 400
 
 // Font family mapping
 export const SUBTITLE_FONT_FAMILIES = {
@@ -77,3 +193,40 @@ export const SUBTITLE_FONT_FAMILIES = {
   "noto-sans": '"Noto Sans", "Noto Sans SC", "Noto Sans JP", "Noto Sans KR", sans-serif',
   "noto-serif": '"Noto Serif", "Noto Serif SC", "Noto Serif JP", "Noto Serif KR", serif',
 }
+
+// Custom CSS
+// The three class hooks above (view, box, and the two line classes) are what custom CSS targets.
+// Presets are appended into the editor as plain text, so each one is a self-contained block that
+// only touches properties none of the sliders own — that way stacking two of them never conflicts
+// with a font size or colour the user already picked.
+export const SUBTITLE_CSS_PRESET_IDS = [
+  "blurTranslation",
+  "dashedTranslation",
+  "dimOriginal",
+] as const
+export type SubtitleCssPresetId = (typeof SUBTITLE_CSS_PRESET_IDS)[number]
+
+export const SUBTITLE_CSS_PRESETS: Record<SubtitleCssPresetId, string> = {
+  // Hover the line itself rather than the box: the outer view is pointer-events: none, and the
+  // box is wider than the text, so revealing on the text is both simpler and more deliberate.
+  blurTranslation: `.subtitles-translation {
+  filter: blur(6px);
+  transition: filter 0.15s ease;
+}
+
+.subtitles-translation:hover {
+  filter: none;
+}`,
+  dashedTranslation: `.subtitles-translation {
+  text-decoration: underline dashed;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.25em;
+}`,
+  dimOriginal: `.subtitles-main {
+  opacity: 0.6;
+}`,
+}
+
+// Subtitles source
+export const SUBTITLES_SOURCE = { NATIVE: "native", AI: "ai" } as const
+export type SubtitlesSource = (typeof SUBTITLES_SOURCE)[keyof typeof SUBTITLES_SOURCE]
