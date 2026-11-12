@@ -1,6 +1,4 @@
-import type {
-  BackgroundStructuredObjectStreamSnapshot,
-} from "@/types/background-stream"
+import type { BackgroundStructuredObjectStreamSnapshot } from "@/types/background-stream"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const streamTextMock = vi.fn<(...args: any[]) => any>()

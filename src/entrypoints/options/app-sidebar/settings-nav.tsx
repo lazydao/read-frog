@@ -28,10 +28,7 @@ export function SettingsNav() {
         <SidebarMenu>
           {NAV_ITEMS.map((item) => (
             <SidebarMenuItem key={item.path}>
-              <SidebarMenuButton
-                render={<Link to={item.path} />}
-                isActive={pathname === item.path}
-              >
+              <SidebarMenuButton render={<Link to={item.path} />} isActive={pathname === item.path}>
                 <Icon icon={item.icon} />
                 <span>{i18n.t(item.label)}</span>
               </SidebarMenuButton>
