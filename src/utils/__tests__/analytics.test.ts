@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { ANALYTICS_FEATURE, ANALYTICS_SURFACE } from "@/types/analytics"
-import {
-  buildFeatureUsedEventProperties,
-  getLatencyMs,
-  trackFeatureUsed,
-} from "@/utils/analytics"
+import { buildFeatureUsedEventProperties, getLatencyMs, trackFeatureUsed } from "@/utils/analytics"
 
 describe("analytics compatibility helpers", () => {
   it("derives latency in milliseconds and clamps negative durations", () => {
