@@ -1,11 +1,10 @@
-import type { LangCodeISO6393 } from "@read-frog/definitions"
-import type { BackgroundGenerateTextPayload } from "@/types/background-generate-text"
-import type { LLMProviderConfig } from "@/types/config/provider"
-import { langCodeISO6393Schema } from "@read-frog/definitions"
+import type { LanguageTag } from "@read-frog/definitions"
+import type { PromptableProviderRef } from "@/utils/providers/provider-ref"
+import { resolveLanguage } from "@read-frog/definitions"
 import { franc } from "franc"
-import { toast } from "sonner"
-import { isLLMProviderConfig } from "@/types/config/provider"
-import { getProviderConfigById } from "@/utils/config/helpers"
+import { toastManager } from "@/components/ui/base-ui/toast"
+import { getLocalConfig } from "@/utils/config/storage"
+import { getRandomUUID } from "@/utils/crypto-polyfill"
 import { i18n } from "@/utils/i18n"
 import { logger } from "@/utils/logger"
 import { sendMessage } from "@/utils/message"
@@ -13,9 +12,11 @@ import {
   getLanguageDetectionSystemPrompt,
   parseDetectedLanguageCode,
 } from "@/utils/prompts/language-detection"
-import { resolveModelId } from "@/utils/providers/model-id"
-import { getProviderOptionsWithOverride } from "@/utils/providers/options"
-import { getTopLevelReasoning } from "@/utils/providers/reasoning"
+import {
+  HostedAiProviderUnavailableError,
+  serializeProviderRef,
+} from "@/utils/providers/provider-ref"
+import { resolveProviderRefForCapability } from "@/utils/providers/provider-registry"
 import { cleanText } from "./utils"
 
 const DEFAULT_MIN_LENGTH = 10
@@ -29,14 +30,16 @@ export interface DetectLanguageOptions {
   minLength?: number
   /** Enable LLM detection */
   enableLLM?: boolean
-  /** LLM provider config for detection (non-LLM providers not supported) */
-  providerConfig?: LLMProviderConfig
+  /** Use a speaking-specific warning when LLM voice detection falls back. */
+  llmFallbackToastContext?: "speak"
+  /** Provider to run LLM detection on; resolved from config when omitted. */
+  providerRef?: PromptableProviderRef
   /** Max text length for LLM detection (default: 500) */
   maxLengthForLLM?: number
 }
 
 export interface DetectLanguageResult {
-  code: LangCodeISO6393 | "und"
+  code: LanguageTag | "und"
   source: DetectionSource
 }
 
@@ -63,13 +66,21 @@ export async function detectLanguageWithSource(
     try {
       const maxLength = options.maxLengthForLLM ?? DEFAULT_MAX_LENGTH_FOR_LLM
       const textForLLM = cleanText(trimmedText, maxLength)
-      const llmResult = await detectLanguageWithLLM(textForLLM, options?.providerConfig)
+      const llmResult = await detectLanguageWithLLM(textForLLM, options?.providerRef)
       if (llmResult && llmResult !== "und") {
         return { code: llmResult, source: "llm" }
       }
     } catch (error) {
       logger.warn("LLM detection failed, falling back to franc:", error)
-      toast.warning(i18n.t("languageDetection.llmFailed"), {
+      const isSpeaking = options.llmFallbackToastContext === "speak"
+      toastManager.add({
+        type: "warning",
+        title: isSpeaking
+          ? i18n.t("speak.languageDetectionFallback")
+          : error instanceof HostedAiProviderUnavailableError
+            ? error.message
+            : i18n.t("languageDetection.llmFailed"),
+        description: isSpeaking ? i18n.t("speak.languageDetectionSettingsHint") : undefined,
         id: LLM_DETECTION_FALLBACK_TOAST_ID,
       })
     }
@@ -81,12 +92,14 @@ export async function detectLanguageWithSource(
     return { code: "und", source: "fallback" }
   }
 
-  const parsedFrancResult = langCodeISO6393Schema.safeParse(francResult)
-  if (!parsedFrancResult.success) {
+  // franc answers in ISO 639-3 (`cmn`, `por`, `als`). This is the only place
+  // that code is read; from here on the language is a BCP 47 tag.
+  const francLanguage = resolveLanguage(francResult)
+  if (!francLanguage) {
     return { code: "und", source: "fallback" }
   }
 
-  return { code: parsedFrancResult.data, source: "franc" }
+  return { code: francLanguage, source: "franc" }
 }
 
 /**
@@ -98,7 +111,7 @@ export async function detectLanguageWithSource(
 export async function detectLanguage(
   text: string,
   options?: DetectLanguageOptions,
-): Promise<LangCodeISO6393 | null> {
+): Promise<LanguageTag | null> {
   const result = await detectLanguageWithSource(text, options)
   return result.code === "und" ? null : result.code
 }
@@ -106,13 +119,13 @@ export async function detectLanguage(
 /**
  * Detect language using LLM with retry logic
  * @param text - Text to analyze (caller is responsible for combining title and content)
- * @param providerConfig - Optional provider config (if not provided, will get from global config)
+ * @param providerRef - Optional provider ref (resolved from global config when omitted)
  * @returns ISO 639-3 language code or null if all attempts fail (null = no LLM provider or all attempts failed)
  */
 export async function detectLanguageWithLLM(
   text: string,
-  providerConfig?: LLMProviderConfig,
-): Promise<LangCodeISO6393 | "und" | null> {
+  providerRef?: PromptableProviderRef,
+): Promise<LanguageTag | "und" | null> {
   const MAX_ATTEMPTS = 3 // 1 original + 2 retries
 
   if (!text.trim()) {
@@ -120,61 +133,62 @@ export async function detectLanguageWithLLM(
     return null
   }
 
-  // Get provider config - use passed or fall back to global
-  let config: LLMProviderConfig | undefined = providerConfig
+  // Use the passed ref or resolve one from config. Resolving goes through the
+  // capability registry rather than providersConfig directly, so Built-in AI —
+  // which is never a row in providersConfig — is reachable here.
+  let ref: PromptableProviderRef | undefined = providerRef
 
-  if (!config) {
+  if (!ref) {
     try {
-      const globalConfig = await sendMessage("getInitialConfig", undefined)
+      const globalConfig = await getLocalConfig()
       if (!globalConfig) {
         logger.warn("No config found for language detection")
         return null
       }
       const ldProviderId = globalConfig.languageDetection.providerId
       if (!ldProviderId) {
-        logger.info("No LLM provider configured for language detection")
+        logger.info("No provider configured for language detection")
         return null
       }
-      const globalProvider = getProviderConfigById(globalConfig.providersConfig, ldProviderId)
-      if (!globalProvider || !isLLMProviderConfig(globalProvider)) {
-        logger.info("No LLM provider configured for page translation")
+      const resolved = resolveProviderRefForCapability(
+        "languageDetection",
+        globalConfig.providersConfig,
+        ldProviderId,
+      )
+      if (!resolved) {
+        logger.info(`Provider "${ldProviderId}" cannot run language detection`)
         return null
       }
-      config = globalProvider
+      ref = await serializeProviderRef(resolved, "languageDetection")
     } catch (error) {
-      logger.error("Failed to get global config for language detection:", error)
+      // Everything above returns null for "no LLM detection is configured",
+      // which the caller reads as a legal state and quietly resolves with
+      // franc. A plan or quota denial is not that state — collapsing it into
+      // the same null is what made the caller's `languageDetection.llmFailed`
+      // toast unreachable, so a user who turned LLM detection on and can never
+      // run it was told nothing at all.
+      if (error instanceof HostedAiProviderUnavailableError) {
+        throw error
+      }
+      logger.error("Failed to resolve the language detection provider:", error)
       return null
     }
   }
 
   try {
-    const {
-      model: providerModel,
-      provider,
-      providerOptions: userProviderOptions,
-      temperature,
-    } = config
-    const reasoning = getTopLevelReasoning(config)
-    const modelName = resolveModelId(providerModel)
-    const providerOptions = getProviderOptionsWithOverride(
-      modelName ?? "",
-      provider,
-      userProviderOptions,
-      reasoning,
-    )
-    const payload: BackgroundGenerateTextPayload = {
-      providerId: config.id,
-      instructions: getLanguageDetectionSystemPrompt(),
-      prompt: text,
-      reasoning,
-      temperature,
-      providerOptions,
-      maxRetries: 0,
-    }
-
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        const response = await sendMessage("backgroundGenerateText", payload)
+        // A fresh request id per attempt: an unparseable answer means the call
+        // must actually be re-run, and reusing the hosted idempotency key
+        // would replay the same bad response instead.
+        const response = await sendMessage("backgroundGenerateText", {
+          providerRef: ref,
+          hostedFeature: "languageDetection",
+          instructions: getLanguageDetectionSystemPrompt(),
+          prompt: text,
+          requestId: getRandomUUID(),
+          maxRetries: 0,
+        })
         const detectedCode = parseDetectedLanguageCode(response.text)
 
         if (detectedCode) {
@@ -192,7 +206,7 @@ export async function detectLanguageWithLLM(
       }
     }
   } catch (error) {
-    logger.error("Failed to get model for language detection:", error)
+    logger.error("Language detection failed:", error)
     return null
   }
 

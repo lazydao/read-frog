@@ -1,21 +1,25 @@
 import type { FrameInfoForSiteControl } from "./iframe-injection-utils"
 import type { Config } from "@/types/config/config"
+import type { ContentRuntimePart } from "@/utils/content-runtime/parts"
 import { browser } from "#imports"
 import { getLocalConfig } from "@/utils/config/storage"
+import { DEFAULT_CONFIG } from "@/utils/constants/config"
+import {
+  CONTENT_LOADER_SCRIPT_FILE,
+  CONTENT_RUNTIME_PARTS_WINDOW_KEY,
+} from "@/utils/content-runtime/parts"
 import { logger } from "@/utils/logger"
 import { isSiteEnabled, SITE_CONTROL_URL_WINDOW_KEY } from "@/utils/site-control"
-import { matchDomainPattern } from "@/utils/url"
+import { ensureRemoteSiteRulesLoaded } from "@/utils/site-rules/active"
+import { getEffectiveSiteRule } from "@/utils/site-rules/effective"
 import { resolveSiteControlUrl } from "./iframe-injection-utils"
 import { getPageTranslationEnabled } from "./page-translation-state"
 
-const HOST_CONTENT_SCRIPT_FILE = "/content-scripts/host.js" as const
-const IFRAME_FULL_RUNTIME_AUTO_INJECT_PATTERNS = ["browse.library.kiwix.org"] as const
-
-type IframeContentScriptFile = typeof HOST_CONTENT_SCRIPT_FILE
+// The parts of the content runtime an iframe can get; the side UI is top-frame only
+type IframeContentPart = Extract<ContentRuntimePart, "host">
 
 const pendingScriptDocumentKeys = new Set<string>()
 const injectedDocumentKeysByFrameAndScript = new Map<string, string>()
-const fullRuntimeAutoInjectUrlByTab = new Map<number, string>()
 
 interface FrameInjectionDetails {
   tabId: number
@@ -40,15 +44,12 @@ function getFrameInjectionKey(details: { tabId: number; frameId: number }) {
   return `${details.tabId}:${details.frameId}`
 }
 
-function getScriptDocumentInjectionKey(
-  details: FrameInjectionDetails,
-  file: IframeContentScriptFile,
-) {
-  return `${getDocumentInjectionKey(details)}:${file}`
+function getScriptDocumentInjectionKey(details: FrameInjectionDetails, part: IframeContentPart) {
+  return `${getDocumentInjectionKey(details)}:${part}`
 }
 
-function getScriptFrameInjectionKey(details: FrameInjectionDetails, file: IframeContentScriptFile) {
-  return `${getFrameInjectionKey(details)}:${file}`
+function getScriptFrameInjectionKey(details: FrameInjectionDetails, part: IframeContentPart) {
+  return `${getFrameInjectionKey(details)}:${part}`
 }
 
 function clearTabDocumentState(tabId: number) {
@@ -63,8 +64,6 @@ function clearTabDocumentState(tabId: number) {
       injectedDocumentKeysByFrameAndScript.delete(key)
     }
   }
-
-  fullRuntimeAutoInjectUrlByTab.delete(tabId)
 }
 
 function clearFrameInjectedDocumentState(tabId: number, frameId: number) {
@@ -97,8 +96,21 @@ function getParentFrameIdHint(details: object): number | undefined {
   return undefined
 }
 
-function setInjectedSiteControlUrl(propertyName: string, siteControlUrl: string) {
-  ;(globalThis as Record<string, unknown>)[propertyName] = siteControlUrl
+// Runs in the frame before the loader, which takes the parts. Overlapping
+// injections into one frame (host-only, then selection) add to the parts
+// still waiting rather than replace them; the first loader runs them all.
+function setInjectedLoaderContext(
+  siteControlUrlPropertyName: string,
+  siteControlUrl: string,
+  partsPropertyName: string,
+  parts: string[],
+) {
+  const frameGlobal = globalThis as Record<string, unknown>
+  const waiting = frameGlobal[partsPropertyName]
+  frameGlobal[siteControlUrlPropertyName] = siteControlUrl
+  frameGlobal[partsPropertyName] = [
+    ...new Set([...(Array.isArray(waiting) ? waiting : []), ...parts]),
+  ]
 }
 
 function getInjectionTarget(details: FrameInjectionDetails) {
@@ -113,16 +125,14 @@ async function getFrameSnapshot(tabId: number): Promise<FrameInfoForSiteControl[
   return (await browser.webNavigation.getAllFrames({ tabId })) ?? []
 }
 
-function isFullRuntimeAutoInjectUrl(url: string | undefined): url is string {
+function isFullRuntimeAutoInjectUrl(url: string | undefined, config: Config | null): url is string {
   if (!url) return false
 
-  return IFRAME_FULL_RUNTIME_AUTO_INJECT_PATTERNS.some((pattern) =>
-    matchDomainPattern(url, pattern),
-  )
+  return getEffectiveSiteRule(config ?? DEFAULT_CONFIG, url).injectIntoIframes === true
 }
 
-function getIframeContentScriptFiles(): IframeContentScriptFile[] {
-  return [HOST_CONTENT_SCRIPT_FILE]
+function getIframeContentParts(): IframeContentPart[] {
+  return ["host"]
 }
 
 async function getShouldInjectHostContentIntoTabIframes(
@@ -149,21 +159,21 @@ async function injectHostContentIntoFrame(
   options: InjectHostContentIntoTabIframesOptions = {},
 ) {
   const documentKey = getDocumentInjectionKey(details)
-  const filesToInject = getIframeContentScriptFiles().filter((file) => {
-    const scriptDocumentKey = getScriptDocumentInjectionKey(details, file)
-    const scriptFrameKey = getScriptFrameInjectionKey(details, file)
+  const partsToInject = getIframeContentParts().filter((part) => {
+    const scriptDocumentKey = getScriptDocumentInjectionKey(details, part)
+    const scriptFrameKey = getScriptFrameInjectionKey(details, part)
     return (
       !pendingScriptDocumentKeys.has(scriptDocumentKey) &&
       injectedDocumentKeysByFrameAndScript.get(scriptFrameKey) !== documentKey
     )
   })
 
-  if (filesToInject.length === 0) {
+  if (partsToInject.length === 0) {
     return
   }
 
-  for (const file of filesToInject) {
-    pendingScriptDocumentKeys.add(getScriptDocumentInjectionKey(details, file))
+  for (const part of partsToInject) {
+    pendingScriptDocumentKeys.add(getScriptDocumentInjectionKey(details, part))
   }
 
   try {
@@ -205,18 +215,22 @@ async function injectHostContentIntoFrame(
 
       await browser.scripting.executeScript({
         target,
-        func: setInjectedSiteControlUrl,
-        args: [SITE_CONTROL_URL_WINDOW_KEY, siteControlUrl],
+        func: setInjectedLoaderContext,
+        args: [
+          SITE_CONTROL_URL_WINDOW_KEY,
+          siteControlUrl,
+          CONTENT_RUNTIME_PARTS_WINDOW_KEY,
+          partsToInject,
+        ],
+      })
+      await browser.scripting.executeScript({
+        target,
+        files: [CONTENT_LOADER_SCRIPT_FILE],
       })
 
-      for (const file of filesToInject) {
-        await browser.scripting.executeScript({
-          target,
-          files: [file],
-        })
-
+      for (const part of partsToInject) {
         injectedDocumentKeysByFrameAndScript.set(
-          getScriptFrameInjectionKey(details, file),
+          getScriptFrameInjectionKey(details, part),
           documentKey,
         )
       }
@@ -224,8 +238,8 @@ async function injectHostContentIntoFrame(
       logger.warn("[Background][IframeInjection] Failed to inject iframe content scripts", error)
     }
   } finally {
-    for (const file of filesToInject) {
-      pendingScriptDocumentKeys.delete(getScriptDocumentInjectionKey(details, file))
+    for (const part of partsToInject) {
+      pendingScriptDocumentKeys.delete(getScriptDocumentInjectionKey(details, part))
     }
   }
 }
@@ -271,6 +285,7 @@ export async function injectHostContentIntoTabIframes(
           {
             tabId,
             frameId: frame.frameId,
+            documentId: frame.documentId,
             parentFrameId: frame.parentFrameId,
             url: frame.url,
           },
@@ -291,53 +306,48 @@ export function setupIframeInjection() {
   browser.webNavigation.onBeforeNavigate.addListener((details) => {
     if (details.frameId === 0) {
       clearTabDocumentState(details.tabId)
-      if (isFullRuntimeAutoInjectUrl(details.url)) {
-        fullRuntimeAutoInjectUrlByTab.set(details.tabId, details.url)
-      }
       return
     }
 
     clearFrameInjectedDocumentState(details.tabId, details.frameId)
   })
 
-  // Only page translation eagerly injects host content into newly completed
-  // subframes. Top-frame node translation can separately scan existing iframes
-  // once, but it does not enable late iframe injection.
+  // Site rules opt in to the full runtime. Otherwise only active page
+  // translation eagerly injects host content into newly completed subframes.
   browser.webNavigation.onCompleted.addListener(async (details) => {
-    if (details.frameId === 0) {
-      if (!isFullRuntimeAutoInjectUrl(details.url)) {
-        fullRuntimeAutoInjectUrlByTab.delete(details.tabId)
+    try {
+      const [config] = await Promise.all([getLocalConfig(), ensureRemoteSiteRulesLoaded()])
+      if (details.frameId === 0) {
+        if (!isFullRuntimeAutoInjectUrl(details.url, config)) return
+
+        await injectHostContentIntoTabIframes(details.tabId, {
+          requirePageTranslationEnabled: false,
+          siteControlUrlOverride: details.url,
+        })
         return
       }
 
-      fullRuntimeAutoInjectUrlByTab.set(details.tabId, details.url)
-      await injectHostContentIntoTabIframes(details.tabId, {
-        requirePageTranslationEnabled: false,
-        siteControlUrlOverride: details.url,
-      })
-      return
-    }
+      // Read the current URL so rules survive MV3 worker restarts and follow
+      // SPA navigation, without enumerating frames on ordinary pages.
+      const { url: topFrameUrl } = await browser.tabs.get(details.tabId)
+      const fullRuntimeAutoInjectUrl = isFullRuntimeAutoInjectUrl(topFrameUrl, config)
+        ? topFrameUrl
+        : isFullRuntimeAutoInjectUrl(details.url, config)
+          ? details.url
+          : undefined
+      if (fullRuntimeAutoInjectUrl) {
+        await injectHostContentIntoFrame(details, undefined, config, {
+          siteControlUrlOverride: fullRuntimeAutoInjectUrl,
+        })
+        return
+      }
 
-    const fullRuntimeAutoInjectUrl =
-      fullRuntimeAutoInjectUrlByTab.get(details.tabId) ??
-      (isFullRuntimeAutoInjectUrl(details.url) ? details.url : undefined)
-    if (fullRuntimeAutoInjectUrl) {
-      await injectHostContentIntoFrame(details, undefined, undefined, {
-        siteControlUrlOverride: fullRuntimeAutoInjectUrl,
-      })
-      return
-    }
-
-    let config: Config | null
-    let shouldInject: boolean
-    try {
-      ;({ config, shouldInject } = await getShouldInjectHostContentIntoTabIframes(details.tabId))
+      const { shouldInject } = await getShouldInjectHostContentIntoTabIframes(details.tabId, config)
       if (!shouldInject) return
+
+      await injectHostContentIntoFrame(details, undefined, config)
     } catch (error) {
       logger.warn("[Background][IframeInjection] Failed to resolve iframe injection state", error)
-      return
     }
-
-    await injectHostContentIntoFrame(details, undefined, config)
   })
 }

@@ -1,26 +1,45 @@
-import type { ViewId } from "."
-import { VISIBLE_SUBPAGES } from "."
-import { DownloadSourceSubtitles } from "../components/download-source-subtitles"
-import { DownloadTranslatedSubtitles } from "../components/download-translated-subtitles"
-import { SubpageMenuEntry } from "../components/subpage-menu-entry"
+import type { NavigateToSubpage } from "."
+import { IconFileDownload, IconLoader2, IconSettings } from "@tabler/icons-react"
+import { useAtomValue } from "jotai"
+import { translatedSubtitlesDownloadStatusAtom } from "../../../atoms"
+import { RequestAiSubtitlesItem } from "../components/request-ai-subtitles-item"
+import { SubtitlesSidebarItem } from "../components/subtitles-sidebar-item"
 import { SubtitlesToggle } from "../components/subtitles-toggle"
+import { isTranslatedDownloadRunning } from "../components/use-download-translated-subtitles"
+import { SubpageLink } from "./subpage-link"
 
-export function MainMenu({ onNavigate }: { onNavigate: (id: ViewId) => void }) {
+function DownloadLink({ onNavigate }: { onNavigate: NavigateToSubpage }) {
+  // A translated download can run for minutes; the spinner keeps it visible after leaving its page.
+  const { phase } = useAtomValue(translatedSubtitlesDownloadStatusAtom)
+
   return (
-    <div className="px-2 py-2.5">
-      <div className="space-y-1.5">
-        <SubtitlesToggle />
-        <DownloadTranslatedSubtitles />
-        <DownloadSourceSubtitles />
+    <SubpageLink
+      id="download"
+      icon={
+        isTranslatedDownloadRunning(phase) ? (
+          <IconLoader2 className="size-3.5 animate-spin" />
+        ) : (
+          <IconFileDownload className="size-3.5" />
+        )
+      }
+      onNavigate={onNavigate}
+    />
+  )
+}
 
-        {VISIBLE_SUBPAGES.map((page) => (
-          <SubpageMenuEntry
-            key={page.id}
-            icon={page.icon}
-            label={page.title()}
-            onClick={() => onNavigate(page.id)}
-          />
-        ))}
+export function MainMenu({ onNavigate }: { onNavigate: NavigateToSubpage }) {
+  return (
+    <div className="p-1">
+      <div className="space-y-0.5">
+        <RequestAiSubtitlesItem />
+        <SubtitlesToggle />
+        <DownloadLink onNavigate={onNavigate} />
+        <SubtitlesSidebarItem />
+        <SubpageLink
+          id="settings"
+          icon={<IconSettings className="size-3.5" />}
+          onNavigate={onNavigate}
+        />
       </div>
     </div>
   )

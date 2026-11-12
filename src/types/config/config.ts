@@ -1,59 +1,149 @@
-import { langCodeISO6393Schema, langLevel } from "@read-frog/definitions"
+import { langLevel } from "@read-frog/definitions"
 import { z } from "zod"
+import {
+  BUILT_IN_ACTION_IDS,
+  BUILT_IN_ACTION_KEYS,
+  isBuiltInActionId,
+} from "@/utils/constants/custom-action"
 import { FEATURE_KEYS, FEATURE_PROVIDER_DEFS } from "@/utils/constants/feature-providers"
 import {
   MAX_SELECTION_OVERLAY_OPACITY,
   MIN_SELECTION_OVERLAY_OPACITY,
 } from "@/utils/constants/selection"
 import { MIN_SIDE_CONTENT_WIDTH } from "@/utils/constants/side"
+import { DEFAULT_TRANSLATION_HUB_SHORTCUT_KEY } from "@/utils/constants/translation-hub"
 import {
   doesProviderSupportsCapability,
   getProviderIdsForCapability,
 } from "@/utils/providers/provider-registry"
+import { normalizeSelectionToolbarLists } from "@/utils/selection-toolbar-order"
 import { floatingButtonSchema } from "./floating-button"
+import { glossaryConfigSchema } from "./glossary"
 import { languageDetectionConfigSchema } from "./language-detection"
-import { isLLMProvider, providersConfigSchema } from "./provider"
-import { selectionToolbarCustomActionsSchema } from "./selection-toolbar"
+import { storedLanguageTagSchema } from "./language-tag"
+import { providersConfigSchema } from "./provider"
+import {
+  selectionToolbarBuiltInActionsSchema,
+  selectionToolbarCustomActionsSchema,
+} from "./selection-toolbar"
+import { shortcutSchema } from "./shortcut"
 import { siteRulesConfigSchema } from "./site-rules"
 import { videoSubtitlesSchema } from "./subtitles"
-import { pageTranslationShortcutSchema, translateConfigSchema } from "./translate"
+import { translateConfigSchema } from "./translate"
 import { ttsConfigSchema } from "./tts"
 // Language schema
 const languageSchema = z.object({
-  sourceCode: langCodeISO6393Schema.or(z.literal("auto")),
-  targetCode: langCodeISO6393Schema,
+  sourceCode: storedLanguageTagSchema.or(z.literal("auto")),
+  targetCode: storedLanguageTagSchema,
   level: langLevel,
 })
 
 const selectionToolbarFeatureSchema = z.object({
   enabled: z.boolean(),
   providerId: z.string().nonempty(),
-  shortcut: pageTranslationShortcutSchema,
+  shortcut: shortcutSchema,
 })
 
 const selectionToolbarSpeakFeatureSchema = z.object({
   enabled: z.boolean(),
+  // Missing means the default key (see getSpeakShortcut); empty means the user
+  // cleared it. Optional rather than defaulted: a UI context that parses a
+  // pre-v110 config and writes it back must not store the default, or the v110
+  // migration could no longer tell it from a key the user chose, and would not
+  // check it against the user's other shortcuts.
+  shortcut: shortcutSchema.optional(),
 })
 
-// Text selection toolbar schema
-const selectionToolbarSchema = z.object({
-  enabled: z.boolean(),
-  disabledSelectionToolbarPatterns: z.array(z.string()),
-  opacity: z.number().min(MIN_SELECTION_OVERLAY_OPACITY).max(MAX_SELECTION_OVERLAY_OPACITY),
-  features: z.object({
-    translate: selectionToolbarFeatureSchema,
-    speak: selectionToolbarSpeakFeatureSchema,
-  }),
-  customActions: selectionToolbarCustomActionsSchema,
-  saveSuggestion: z.object({
+// The toolbar's leftmost slot: annotates the selection with its meaning
+// between the lines. A fixed place like the "more" menu's, not an item in
+// `order`. `.default()` lets a config stored before v116 parse in UI contexts
+// that load ahead of the background migration.
+const selectionToolbarAnnotationSchema = z
+  .object({
     enabled: z.boolean(),
-  }),
-})
+    // Missing means the default key (see getAnnotationShortcut); empty means
+    // the user cleared it. Optional rather than defaulted, for the reason
+    // given on the speak feature's key.
+    shortcut: shortcutSchema.optional(),
+    // The key that turns annotation mode on and off (see
+    // getAnnotationModeShortcut), optional for the same reason: the v119
+    // migration must still tell a missing key from one the user chose.
+    modeShortcut: shortcutSchema.optional(),
+  })
+  .default(() => ({ enabled: true }))
+
+// Text selection toolbar schema
+const selectionToolbarSchema = z
+  .object({
+    enabled: z.boolean(),
+    disabledSelectionToolbarPatterns: z.array(z.string()),
+    opacity: z.number().min(MIN_SELECTION_OVERLAY_OPACITY).max(MAX_SELECTION_OVERLAY_OPACITY),
+    features: z.object({
+      translate: selectionToolbarFeatureSchema,
+      speak: selectionToolbarSpeakFeatureSchema,
+    }),
+    annotation: selectionToolbarAnnotationSchema,
+    builtInActions: selectionToolbarBuiltInActionsSchema,
+    customActions: selectionToolbarCustomActionsSchema,
+    // The order of every toolbar item (translate, speak and the actions), by
+    // id. Kept in step with the items by the transform below. `.default([])`
+    // lets a config stored before this field parse in UI contexts that load
+    // ahead of the background migration.
+    order: z.array(z.string().min(1)).default([]),
+    // Ids of the items kept off the toolbar itself, in its "more" menu only.
+    // Every other item is pinned. Independent of an item's enabled switch,
+    // so a pin survives the item being turned off and on.
+    unpinned: z.array(z.string().min(1)).default([]),
+    noteSuggestion: z.object({
+      enabled: z.boolean(),
+      actionId: z.string().nonempty(),
+      providerId: z.string().nonempty(),
+    }),
+  })
+  .superRefine((selectionToolbar, ctx) => {
+    const actionId = selectionToolbar.noteSuggestion.actionId
+    const actionExists =
+      isBuiltInActionId(actionId) ||
+      selectionToolbar.customActions.some((action) => action.id === actionId)
+
+    if (!actionExists) {
+      ctx.addIssue({
+        code: "custom",
+        message: `Note suggestion action "${actionId}" not found.`,
+        path: ["noteSuggestion", "actionId"],
+      })
+    }
+  })
+  // Every parse brings `order` and `unpinned` in step with the actions there
+  // are, so adding or deleting an action never has to update them itself.
+  .transform((selectionToolbar) => normalizeSelectionToolbarLists(selectionToolbar))
 
 // side content schema
 const sideContentSchema = z.object({
   width: z.number().min(MIN_SIDE_CONTENT_WIDTH),
 })
+
+// Translation Hub schema. `.default()` mirrors `uiLanguageSchema`: it lets a
+// config stored before this field existed still parse in UI contexts that load
+// ahead of the background migration, instead of falling back to DEFAULT_CONFIG
+// and writing that over the user's settings.
+const translationHubSchema = z
+  .object({
+    shortcut: shortcutSchema,
+    selectedProviderIds: z.array(z.string().min(1)).nullable().default(null),
+    sourceCode: storedLanguageTagSchema.or(z.literal("auto")).nullable().default(null),
+    targetCode: storedLanguageTagSchema.nullable().default(null),
+    // A missing ID in a pre-migration config must stay unset until v102 copies
+    // the page prompt; another UI context may write this config first.
+    promptId: z.string().min(1).nullable().default(null),
+  })
+  .default({
+    shortcut: DEFAULT_TRANSLATION_HUB_SHORTCUT_KEY,
+    selectedProviderIds: null,
+    sourceCode: null,
+    targetCode: null,
+    promptId: null,
+  })
 
 // beta experience schema
 const betaExperienceSchema = z.object({
@@ -69,7 +159,7 @@ const contextMenuSchema = z.object({
 const inputTranslationLangSchema = z.union([
   z.literal("sourceCode"),
   z.literal("targetCode"),
-  langCodeISO6393Schema,
+  storedLanguageTagSchema,
 ])
 
 // input translation schema (triple-space trigger)
@@ -99,7 +189,7 @@ const siteControlSchema = z.object({
 // parse successfully, avoiding the destructive fallback-to-DEFAULT_CONFIG path in
 // `writeConfigAtom` / `initializeConfig` during the upgrade window.
 const uiLanguageSchema = z
-  .enum(["auto", "en", "es", "ja", "ko", "ru", "tr", "vi", "zh-CN", "zh-TW"])
+  .enum(["auto", "az", "en", "es", "ja", "ko", "ru", "tr", "vi", "zh-CN", "zh-TW"])
   .default("auto")
 export type UiLanguage = z.infer<typeof uiLanguageSchema>
 
@@ -108,7 +198,7 @@ export const configSchema = z
   .object({
     language: languageSchema,
     providersConfig: providersConfigSchema,
-    translate: translateConfigSchema,
+    pageTranslation: translateConfigSchema,
     languageDetection: languageDetectionConfigSchema,
     tts: ttsConfigSchema,
     floatingButton: floatingButtonSchema,
@@ -121,6 +211,8 @@ export const configSchema = z
     siteControl: siteControlSchema,
     siteRules: siteRulesConfigSchema,
     uiLanguage: uiLanguageSchema,
+    translationHub: translationHubSchema,
+    glossary: glossaryConfigSchema,
   })
   .superRefine((data, ctx) => {
     for (const featureKey of FEATURE_KEYS) {
@@ -153,52 +245,53 @@ export const configSchema = z
           message: `Language detection mode is "llm" but no providerId is configured.`,
           path: ["languageDetection", "providerId"],
         })
-      } else {
-        const ldProvider = data.providersConfig.find((p) => p.id === ldProviderId)
-        if (!ldProvider) {
-          ctx.addIssue({
-            code: "custom",
-            message: `Language detection provider "${ldProviderId}" not found in providersConfig.`,
-            path: ["languageDetection", "providerId"],
-          })
-        } else {
-          if (!isLLMProvider(ldProvider.provider)) {
-            ctx.addIssue({
-              code: "custom",
-              message: `Language detection provider "${ldProviderId}" is not an LLM provider.`,
-              path: ["languageDetection", "providerId"],
-            })
-          }
-          if (!ldProvider.enabled) {
-            ctx.addIssue({
-              code: "custom",
-              message: `Language detection provider "${ldProviderId}" must be enabled.`,
-              path: ["languageDetection", "providerId"],
-            })
-          }
-        }
-      }
-    }
-
-    data.selectionToolbar.customActions.forEach((action, index) => {
-      const providerId = action.providerId
-      if (
-        !doesProviderSupportsCapability(
-          "selectionToolbar.customAction",
-          data.providersConfig,
-          providerId,
-          { requireEnable: true },
-        )
+      } else if (
+        // Capability-based, like the FEATURE_KEYS loop above, rather than a
+        // providersConfig lookup: Built-in AI is never a row in
+        // providersConfig, so requiring one there is what used to make a
+        // hosted provider fail validation and reset the whole config.
+        !doesProviderSupportsCapability("languageDetection", data.providersConfig, ldProviderId, {
+          requireEnable: true,
+        })
       ) {
         ctx.addIssue({
           code: "invalid_value",
-          values: getProviderIdsForCapability(
-            "selectionToolbar.customAction",
-            data.providersConfig,
-            { requireEnable: true },
-          ),
+          values: getProviderIdsForCapability("languageDetection", data.providersConfig, {
+            requireEnable: true,
+          }),
+          message: `Invalid provider id "${ldProviderId}".`,
+          path: ["languageDetection", "providerId"],
+        })
+      }
+    }
+
+    const actionProviderEntries = [
+      ...BUILT_IN_ACTION_IDS.map((id) => {
+        const key = BUILT_IN_ACTION_KEYS[id]
+        return {
+          providerId: data.selectionToolbar.builtInActions[key].providerId,
+          path: ["selectionToolbar", "builtInActions", key, "providerId"] as const,
+        }
+      }),
+      ...data.selectionToolbar.customActions.map((action, index) => ({
+        providerId: action.providerId,
+        path: ["selectionToolbar", "customActions", index, "providerId"] as const,
+      })),
+    ]
+
+    actionProviderEntries.forEach(({ providerId, path }) => {
+      if (
+        !doesProviderSupportsCapability("customAction", data.providersConfig, providerId, {
+          requireEnable: true,
+        })
+      ) {
+        ctx.addIssue({
+          code: "invalid_value",
+          values: getProviderIdsForCapability("customAction", data.providersConfig, {
+            requireEnable: true,
+          }),
           message: `Invalid provider id "${providerId}".`,
-          path: ["selectionToolbar", "customActions", index, "providerId"],
+          path: [...path],
         })
       }
     })

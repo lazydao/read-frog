@@ -1,6 +1,6 @@
 ---
 description: Prepare all work before creating a pull request, optionally for the issue provided as argument
-allowed-tools: Bash(git:*), Bash(gh:*), Read, Glob, Write, Edit
+allowed-tools: Bash(git:*), Bash(gh:*), Bash(pnpm:*), Bash(npm:*), Bash(node:*), Bash(python3:*), Read, Glob, Write, Edit, Skill
 argument-hint: [issue-number]
 ---
 
@@ -25,6 +25,17 @@ Follow these steps:
 
 4. **Add changeset record if necessary**
    - Manually add a file in `.changeset/` directory following changeset convention
+   - The package name is always `@read-frog/extension`. This is a single-package workspace and changesets matches the header against the `name` in the root `package.json`; a bare `read-frog` is not a workspace package and makes the release plan fail.
+   - File shape — fill in the bump level and the summary, leave the package name as written:
+
+     ```markdown
+     ---
+     "@read-frog/extension": patch
+     ---
+
+     fix(subtitles): follow YouTube's own default caption track
+     ```
+
    - Changeset summary should use conventional commit style and should match the descriptive PR title
    - **Versioning rules:**
      - `patch` (0.0.x) — Users barely notice
@@ -44,6 +55,7 @@ Follow these steps:
        - Removal of existing features
        - API/storage structure breaking changes
        - Fundamental migrations (e.g., Manifest V2 → V3)
+   - Verify the changeset before committing: `pnpm exec changeset status` must list the expected bump under `@read-frog/extension`. A non-zero exit means the changeset is malformed and the release plan will not generate.
 
 5. **Ensure all changes are committed**
    - Stage and commit any uncommitted changes
@@ -54,12 +66,17 @@ Follow these steps:
 6. **Push the branch to remote**
    - Run `git push -u origin <branch-name>` if needed
 
-7. **Create Markdown for PR Description**
+7. **Record a demo for user-visible frontend changes**
+   - Same rule as `/create-pr` step 4: a demo is required when the diff changes user-visible behavior, and not required for implementation-only changes.
+   - When one is required, invoke the `record-extension-demo` skill, keep the recording in the scratchpad, and upload it with `gh image "<file>" --repo mengxi-ream/read-frog` before writing the description. When none is required, skip straight to the next step — there is nothing to record or upload.
+
+8. **Create Markdown for PR Description**
    - Create a markdown file in docs/ folder which only contains the description of the PR and for me later to copy paste:
      - Comprehensive PR description following the template at `.github/PULL_REQUEST_TEMPLATE.md`
      - If an issue number was provided, include it in the PR description using `Closes #<issue-number>`
      - If no issue number was provided, search for a relevant issue only if it is easy to identify; otherwise leave the issue field empty instead of blocking the workflow
      - Leave the file uncommitted; it should stay local even after the branch is pushed
+     - Put the uploaded `user-attachments` URL and the demonstrated scenes in the `## Screenshots` section between `<!-- read-frog-pr-demo:start -->` and `<!-- read-frog-pr-demo:end -->`, or write `Not applicable — no user-visible change.`
 
 ## Commit Convention
 

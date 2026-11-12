@@ -29,7 +29,7 @@ describe("deepl translate adapter", () => {
       text: vi.fn<(...args: any[]) => any>().mockResolvedValue(""),
     })
 
-    const result = await deeplTranslate("Hello", "auto", "zh", {
+    const result = await deeplTranslate("Hello", "auto", "zh-Hans", {
       id: "deepl-default",
       enabled: true,
       name: "DeepL",
@@ -49,14 +49,14 @@ describe("deepl translate adapter", () => {
       }),
     )
 
-    const [, requestInit] = fetchMock.mock.calls[0]
+    const [, requestInit] = fetchMock.mock.calls[0]!
     expect(JSON.parse(requestInit.body)).toEqual({
       text: ["Hello"],
       target_lang: "ZH-HANS",
     })
   })
 
-  it("normalizes zh-TW source language to ZH", async () => {
+  it("sends Traditional Chinese as the source language ZH", async () => {
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
@@ -67,7 +67,7 @@ describe("deepl translate adapter", () => {
       text: vi.fn<(...args: any[]) => any>().mockResolvedValue(""),
     })
 
-    await deeplTranslate("甲", "zh-TW", "en", {
+    await deeplTranslate("甲", "zh-Hant", "en", {
       id: "deepl-default",
       enabled: true,
       name: "DeepL",
@@ -75,7 +75,7 @@ describe("deepl translate adapter", () => {
       apiKey: "test-key",
     })
 
-    const [, requestInit] = fetchMock.mock.calls[0]
+    const [, requestInit] = fetchMock.mock.calls[0]!
     expect(JSON.parse(requestInit.body)).toEqual({
       text: ["甲"],
       source_lang: "ZH",
@@ -110,7 +110,7 @@ describe("deepl translate adapter", () => {
         { textFormat },
       )
 
-      const [, requestInit] = fetchMock.mock.calls[0]
+      const [, requestInit] = fetchMock.mock.calls[0]!
       expect(JSON.parse(requestInit.body)).toEqual({
         text: ["Hello"],
         source_lang: "EN",
@@ -144,7 +144,7 @@ describe("deepl translate adapter", () => {
       { textFormat: "html" },
     )
 
-    const [, requestInit] = fetchMock.mock.calls[0]
+    const [, requestInit] = fetchMock.mock.calls[0]!
     expect(JSON.parse(requestInit.body)).toEqual({
       text: ['<p class="message">Hello</p>'],
       source_lang: "EN",

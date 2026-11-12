@@ -84,8 +84,8 @@ export function parseScrollingAsrSubtitles(
     const segs = event.segs
     for (let i = 0; i < segs.length; i++) {
       const seg = segs[i]
-      const text = seg.utf8 || ""
-      const offsetMs = seg.tOffsetMs || 0
+      const text = seg!.utf8 || ""
+      const offsetMs = seg!.tOffsetMs || 0
       const segStart = event.tStartMs + offsetMs
 
       // If pending split and this is a new seg, output current fragment first
@@ -110,7 +110,17 @@ export function parseScrollingAsrSubtitles(
       }
 
       currentText += text
-      lastSegEnd = segStart + ESTIMATED_WORD_DURATION_MS
+      // The final segment owns the rest of the event. A fixed 200 ms estimate
+      // can make an entire sentence expire between video timeupdate events,
+      // especially when YouTube sends a sentence as one segment.
+      const nextSegOffsetMs = segs[i + 1]?.tOffsetMs
+      lastSegEnd =
+        nextSegOffsetMs !== undefined
+          ? Math.max(segStart + ESTIMATED_WORD_DURATION_MS, event.tStartMs + nextSegOffsetMs)
+          : Math.max(
+              segStart + ESTIMATED_WORD_DURATION_MS,
+              event.tStartMs + (event.dDurationMs ?? 0),
+            )
 
       const isSentenceEnd = SENTENCE_END_PATTERN.test(text.trim())
       const textLength = getTextLength(currentText, isCJK)

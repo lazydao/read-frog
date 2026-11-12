@@ -1,7 +1,8 @@
 import "@/utils/zod-config"
 import { defineContentScript } from "#imports"
+import { getLocalConfig } from "@/utils/config/storage"
 import { initI18n } from "@/utils/i18n"
-import { sendMessage } from "@/utils/message"
+import { subtitlesContentScriptMatches } from "./content-script-matches"
 
 declare global {
   interface Window {
@@ -10,14 +11,14 @@ declare global {
 }
 
 export default defineContentScript({
-  matches: ["*://*.youtube.com/*", "*://*.youtube-nocookie.com/*"],
+  matches: subtitlesContentScriptMatches,
   allFrames: true,
   cssInjectionMode: "manifest",
   async main(ctx) {
     if (window.__READ_FROG_SUBTITLES_INJECTED__) return
     window.__READ_FROG_SUBTITLES_INJECTED__ = true
 
-    const config = await sendMessage("getInitialConfig", undefined)
+    const config = await getLocalConfig()
     if (!config?.videoSubtitles?.enabled) {
       window.__READ_FROG_SUBTITLES_INJECTED__ = false
       return
@@ -30,6 +31,6 @@ export default defineContentScript({
     })
 
     const { bootstrapSubtitlesRuntime } = await import("./runtime")
-    bootstrapSubtitlesRuntime()
+    bootstrapSubtitlesRuntime(ctx)
   },
 })

@@ -38,13 +38,13 @@ describe("getProviderOptions", () => {
 
       const thinkingLevelProOptions = getProviderOptions("gemini-3-pro-preview", "google")
       expect(thinkingLevelProOptions.google?.thinkingConfig).toMatchObject({
-        thinkingLevel: "minimal",
+        thinkingLevel: "low",
         includeThoughts: false,
       })
 
       const thinkingLevel31ProOptions = getProviderOptions("gemini-3.1-pro-preview", "google")
       expect(thinkingLevel31ProOptions.google?.thinkingConfig).toMatchObject({
-        thinkingLevel: "minimal",
+        thinkingLevel: "low",
         includeThoughts: false,
       })
 
@@ -60,6 +60,39 @@ describe("getProviderOptions", () => {
       const thinkingLevel35FlashOptions = getProviderOptions("gemini-3.5-flash", "google")
       expect(thinkingLevel35FlashOptions.google?.thinkingConfig).toMatchObject({
         thinkingLevel: "minimal",
+        includeThoughts: false,
+      })
+
+      const thinkingLevel35FlashLiteOptions = getProviderOptions("gemini-3.5-flash-lite", "google")
+      expect(thinkingLevel35FlashLiteOptions.google?.thinkingConfig).toMatchObject({
+        thinkingLevel: "minimal",
+        includeThoughts: false,
+      })
+
+      const thinkingLevel36FlashOptions = getProviderOptions("gemini-3.6-flash", "google")
+      expect(thinkingLevel36FlashOptions.google?.thinkingConfig).toMatchObject({
+        thinkingLevel: "minimal",
+        includeThoughts: false,
+      })
+
+      const thinkingLevelFlashLatestOptions = getProviderOptions("gemini-flash-latest", "google")
+      expect(thinkingLevelFlashLatestOptions.google?.thinkingConfig).toMatchObject({
+        thinkingLevel: "low",
+        includeThoughts: false,
+      })
+
+      const thinkingLevelFlashLiteLatestOptions = getProviderOptions(
+        "gemini-flash-lite-latest",
+        "google",
+      )
+      expect(thinkingLevelFlashLiteLatestOptions.google?.thinkingConfig).toMatchObject({
+        thinkingLevel: "minimal",
+        includeThoughts: false,
+      })
+
+      const thinkingLevelProLatestOptions = getProviderOptions("gemini-pro-latest", "google")
+      expect(thinkingLevelProLatestOptions.google?.thinkingConfig).toMatchObject({
+        thinkingLevel: "low",
         includeThoughts: false,
       })
     })
@@ -116,10 +149,32 @@ describe("getProviderOptions", () => {
 
     it("should expose the current xAI Grok chat model ids", () => {
       expect(LLM_PROVIDER_MODELS.xai).toEqual([
+        "grok-4.3",
+        "grok-4.7",
+        "grok-4.6",
+        "grok-4.5",
+        "grok-4.20-non-reasoning",
+        "grok-4.20-reasoning",
         "grok-4.20-0309-non-reasoning",
         "grok-4.20-0309-reasoning",
-        "grok-4.3",
       ])
+    })
+
+    it("should prioritize the Jalapeno Cloud GLM models", () => {
+      expect(LLM_PROVIDER_MODELS.jalapenocloud.slice(0, 3)).toEqual([
+        "GLM-5.3",
+        "GLM-5.3-Flash",
+        "GLM-5.1",
+      ])
+    })
+
+    it("should not list the retired, delisted or superseded models", () => {
+      for (const model of ["GLM-5.2", "Hy3", "Qwen3-Next-80B-A3B-Instruct"]) {
+        expect(LLM_PROVIDER_MODELS.jalapenocloud).not.toContain(model)
+      }
+      for (const model of ["deepseek-chat", "deepseek-reasoner"]) {
+        expect(LLM_PROVIDER_MODELS.deepseek).not.toContain(model)
+      }
     })
 
     it("should expose current Ollama recommended model ids", () => {
@@ -134,6 +189,19 @@ describe("getProviderOptions", () => {
     it("should expose the supported Anthropic Fable model ids", () => {
       expect(LLM_PROVIDER_MODELS.anthropic).toContain("claude-fable-5")
       expect(LLM_PROVIDER_MODELS.bedrock).toContain("us.anthropic.claude-fable-5")
+    })
+
+    it("should expose the live Cohere Command model ids and none of the retired ones", () => {
+      expect(LLM_PROVIDER_MODELS.cohere).toEqual([
+        "command-a-plus-05-2026",
+        "command-a-03-2025",
+        "command-a-reasoning-08-2025",
+        "command-a-vision-07-2025",
+        "command-a-translate-08-2025",
+        "command-r-plus-08-2024",
+        "command-r-08-2024",
+        "command-r7b-12-2024",
+      ])
     })
 
     it("should return the documented floor for GPT-5 model-specific reasoning", () => {
@@ -197,10 +265,10 @@ describe("getProviderOptions", () => {
 
     it("should return low/disabled defaults for more mainstream reasoning providers", () => {
       const grokOptions = getProviderOptions("grok-4.3", "xai")
-      expect(grokOptions.xai?.reasoningEffort).toBe("low")
+      expect(grokOptions.xai?.reasoningEffort).toBe("none")
 
       const mixedCaseGrokOptions = getProviderOptions("Grok-4.3", "xai")
-      expect(mixedCaseGrokOptions.xai?.reasoningEffort).toBe("low")
+      expect(mixedCaseGrokOptions.xai?.reasoningEffort).toBe("none")
 
       const datedGrokReasoningOptions = getProviderOptions("grok-4.20-0309-reasoning", "xai")
       expect(datedGrokReasoningOptions.xai?.reasoningEffort).toBe("low")
@@ -307,10 +375,10 @@ describe("getProviderOptions", () => {
       )
 
       const groqOptions = getProviderOptions("openai/gpt-oss-120b", "groq")
-      expect(groqOptions.groq?.reasoningEffort).toBe("none")
+      expect(groqOptions.groq?.reasoningEffort).toBe("low")
 
       const cerebrasOptions = getProviderOptions("gpt-oss-120b", "cerebras")
-      expect(cerebrasOptions.cerebras?.reasoningEffort).toBe("none")
+      expect(cerebrasOptions.cerebras?.reasoningEffort).toBe("low")
     })
 
     it("should apply Volcengine Doubao Seed thinking defaults with optional version suffixes", () => {
@@ -383,13 +451,50 @@ describe("getProviderOptions", () => {
     })
   })
 
+  describe("models added in the 2026-11 catalog refresh", () => {
+    it("should give Gemini 4 a thinking level, never the thinkingBudget it rejects", () => {
+      const options = getProviderOptions("gemini-4-argon", "google")
+      expect(options.google?.thinkingConfig).toEqual({
+        thinkingLevel: "low",
+        includeThoughts: false,
+      })
+    })
+
+    it("should use the lowest reasoning effort each GPT-6.1 model accepts", () => {
+      expect(getProviderOptions("gpt-6.1-sol", "openai").openai?.reasoningEffort).toBe("low")
+      expect(getProviderOptions("gpt-6.1-terra", "openai").openai?.reasoningEffort).toBe("none")
+    })
+
+    it("should use low reasoning effort for Grok 4.7, which cannot disable reasoning", () => {
+      expect(getProviderOptions("grok-4.7", "xai").xai?.reasoningEffort).toBe("low")
+    })
+
+    it("should use low reasoning effort for Kimi K3.1 Pro and its highspeed variant", () => {
+      for (const model of ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"]) {
+        expect(getProviderOptions(model, "moonshotai")).toEqual({
+          moonshotai: { reasoningEffort: "low" },
+        })
+      }
+    })
+
+    it("should disable thinking for the deepseek-flash alias", () => {
+      expect(getProviderOptions("deepseek-flash", "deepseek").deepseek?.thinking).toEqual({
+        type: "disabled",
+      })
+    })
+
+    it("should never send thinking: disabled to MiniMax-M3.1-Flash, which errors on it", () => {
+      expect(getProviderOptions("MiniMax-M3.1-Flash", "minimax")).toEqual({})
+    })
+  })
+
   describe("glm model pattern matching", () => {
     it("should match GLM-* models (case-insensitive)", () => {
       const uppercase = getProviderOptions("GLM-4-Plus", "openai-compatible")
-      expect(uppercase["openai-compatible"].thinking).toEqual({ type: "disabled" })
+      expect(uppercase["openai-compatible"]!.thinking).toEqual({ type: "disabled" })
 
       const lowercase = getProviderOptions("glm-4-flash", "openai-compatible")
-      expect(lowercase["openai-compatible"].thinking).toEqual({ type: "disabled" })
+      expect(lowercase["openai-compatible"]!.thinking).toEqual({ type: "disabled" })
 
       const mixed = getProviderOptions("GlM-3-Turbo", "tensdaq")
       expect(mixed.tensdaq?.thinking).toEqual({ type: "disabled" })
@@ -467,6 +572,28 @@ describe("getProviderOptions", () => {
           reasoningEffort: "minimal",
           textVerbosity: "low",
         },
+      })
+    })
+
+    it("should preserve Open Responses option names exactly as entered", () => {
+      const options = getProviderOptionsWithOverride("gpt-5-mini", "open-responses", {
+        reasoning_effort: "minimal",
+        verbosity: "low",
+      })
+
+      expect(options).toEqual({
+        "open-responses": {
+          reasoning_effort: "minimal",
+          verbosity: "low",
+        },
+      })
+    })
+
+    it("should continue recommending provider options for Open Responses", () => {
+      const options = getProviderOptionsWithOverride("qwen3-max", "open-responses")
+
+      expect(options).toEqual({
+        "open-responses": { enableThinking: false },
       })
     })
   })

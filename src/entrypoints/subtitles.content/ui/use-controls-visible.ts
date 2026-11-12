@@ -1,5 +1,6 @@
 import type { ControlsConfig } from "@/entrypoints/subtitles.content/platforms"
 import { useEffect, useEffectEvent, useState } from "react"
+import { MAX_CONTROLS_HEIGHT_RATIO } from "@/utils/constants/subtitles"
 import { getContainingShadowRoot } from "@/utils/host/dom/node"
 
 interface ControlsInfo {
@@ -16,10 +17,15 @@ export function useControlsInfo(
   const updateInfo = useEffectEvent((container: HTMLElement) => {
     if (!controlsConfig) return
 
-    setInfo({
-      controlsVisible: controlsConfig.checkVisibility(container),
-      controlsHeight: controlsConfig.measureHeight(container),
-    })
+    const maxHeight = container.getBoundingClientRect().height * MAX_CONTROLS_HEIGHT_RATIO
+    const controlsVisible = controlsConfig.checkVisibility(container)
+    const controlsHeight = Math.min(controlsConfig.measureHeight(container), maxHeight)
+    // Most rechecks change nothing; keeping the same object spares the panel a render.
+    setInfo((previous) =>
+      previous.controlsVisible === controlsVisible && previous.controlsHeight === controlsHeight
+        ? previous
+        : { controlsVisible, controlsHeight },
+    )
   })
 
   const setupObserver = useEffectEvent(() => {
@@ -28,7 +34,7 @@ export function useControlsInfo(
     const element = elementRef.current
     const shadowRoot = element ? getContainingShadowRoot(element) : null
     const shadowHost = shadowRoot?.host as HTMLElement | undefined
-    const videoContainer = shadowHost?.parentElement ?? controlsConfig.findVideoContainer?.()
+    const videoContainer = controlsConfig.findVideoContainer?.() ?? shadowHost?.parentElement
     if (!videoContainer) return undefined
 
     updateInfo(videoContainer)
@@ -36,14 +42,25 @@ export function useControlsInfo(
     const observer = new MutationObserver(() => {
       updateInfo(videoContainer)
     })
-
-    observer.observe(videoContainer, {
-      attributes: true,
-      attributeFilter: ["class"],
-      subtree: true,
+    const resizeObserver = new ResizeObserver(() => {
+      updateInfo(videoContainer)
     })
 
-    return () => observer.disconnect()
+    observer.observe(
+      videoContainer,
+      controlsConfig.observe ?? {
+        attributes: true,
+        attributeFilter: ["class"],
+        childList: true,
+        subtree: true,
+      },
+    )
+    resizeObserver.observe(videoContainer)
+
+    return () => {
+      observer.disconnect()
+      resizeObserver.disconnect()
+    }
   })
 
   useEffect(() => {

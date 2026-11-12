@@ -14,18 +14,22 @@ const mocks = vi.hoisted(() => ({
   aiSegmentBlock: vi.fn<(...args: any[]) => any>(),
   downloadSubtitlesAsSrt: vi.fn<(...args: any[]) => any>(),
   fetchSubtitlesSummary: vi.fn<(...args: any[]) => any>(),
-  sendMessage: vi.fn<(...args: any[]) => any>(),
-  toastError: vi.fn<(...args: any[]) => any>(),
+  getLocalConfig: vi.fn<(...args: any[]) => any>(),
+  resolveSubtitlesProviderRef: vi.fn<(...args: any[]) => any>(),
+  toastAdd: vi.fn<(...args: any[]) => any>(),
   translateSubtitles: vi.fn<(...args: any[]) => any>(),
 }))
 
-vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }))
-vi.mock("@/utils/message", () => ({ sendMessage: mocks.sendMessage }))
+vi.mock("@/components/ui/base-ui/toast", () => ({
+  toastManager: { add: mocks.toastAdd },
+}))
+vi.mock("@/utils/config/storage", () => ({ getLocalConfig: mocks.getLocalConfig }))
 vi.mock("@/utils/subtitles/processor/ai-segmentation", () => ({
   aiSegmentBlock: mocks.aiSegmentBlock,
 }))
 vi.mock("@/utils/subtitles/processor/translator", () => ({
   buildSubtitlesSummaryContextHash: () => "summary-hash",
+  resolveSubtitlesProviderRef: mocks.resolveSubtitlesProviderRef,
   fetchSubtitlesSummary: mocks.fetchSubtitlesSummary,
   translateSubtitles: mocks.translateSubtitles,
 }))
@@ -33,7 +37,7 @@ vi.mock("@/utils/subtitles/srt", () => ({ downloadSubtitlesAsSrt: mocks.download
 
 function createConfig({
   aiSegmentation = false,
-  targetCode = "cmn",
+  targetCode = "zh-Hans",
 }: {
   aiSegmentation?: boolean
   targetCode?: Config["language"]["targetCode"]
@@ -41,23 +45,28 @@ function createConfig({
   const provider = DEFAULT_PROVIDER_CONFIG.openai
   return {
     ...DEFAULT_CONFIG,
-    language: { ...DEFAULT_CONFIG.language, sourceCode: "eng", targetCode },
+    language: { ...DEFAULT_CONFIG.language, sourceCode: "en", targetCode },
     providersConfig: [provider],
     videoSubtitles: { ...DEFAULT_CONFIG.videoSubtitles, providerId: provider.id, aiSegmentation },
   }
 }
 
-function createDownloader(fragments: SubtitlesFragment[], preSegmented = true) {
+function createDownloader(
+  fragments: SubtitlesFragment[],
+  preSegmented = true,
+  trackLanguage = "en",
+) {
   const fetcher = {
     fetch: vi.fn<(...args: any[]) => any>().mockResolvedValue(fragments),
     cleanup: vi.fn<(...args: any[]) => any>(),
     shouldUseSameTrack: vi.fn<(...args: any[]) => any>().mockResolvedValue(false),
-    getSourceLanguage: () => "en",
+    getSourceLanguage: () => trackLanguage,
     hasAvailableSubtitles: vi.fn<(...args: any[]) => any>().mockResolvedValue(true),
     isPreSegmented: () => preSegmented,
   }
   return {
-    downloader: new TranslatedSubtitlesDownloader(fetcher, {
+    downloader: new TranslatedSubtitlesDownloader(() => fetcher, {
+      platform: "youtube",
       selectors: {
         video: "video",
         playerContainer: ".player",
@@ -96,7 +105,13 @@ describe("translatedSubtitlesDownloader", () => {
       phase: TranslatedDownloadPhase.Idle,
       progress: null,
     })
-    mocks.sendMessage.mockResolvedValue(createConfig())
+    mocks.getLocalConfig.mockResolvedValue(createConfig())
+    // The export resolves one ref up front and threads it into segmentation;
+    // a null here would skip the AI path entirely.
+    mocks.resolveSubtitlesProviderRef.mockResolvedValue({
+      kind: "local",
+      config: DEFAULT_PROVIDER_CONFIG.openai,
+    })
     mocks.fetchSubtitlesSummary.mockResolvedValue(null)
     mocks.translateSubtitles.mockImplementation(async (fragments: SubtitlesFragment[]) =>
       translated(fragments),
@@ -108,7 +123,7 @@ describe("translatedSubtitlesDownloader", () => {
     const fragments = lines(6)
     const { downloader } = createDownloader(fragments)
     const statuses: Array<ReturnType<typeof status>> = []
-    mocks.sendMessage.mockResolvedValue(config)
+    mocks.getLocalConfig.mockResolvedValue(config)
     const unsubscribe = subtitlesStore.sub(translatedSubtitlesDownloadStatusAtom, () =>
       statuses.push(status()),
     )
@@ -116,9 +131,13 @@ describe("translatedSubtitlesDownloader", () => {
     await downloader.download()
     unsubscribe()
 
-    expect(mocks.sendMessage).toHaveBeenCalledOnce()
-    expect(mocks.sendMessage).toHaveBeenCalledWith("getInitialConfig", undefined)
-    expect(mocks.fetchSubtitlesSummary).toHaveBeenCalledWith(expect.any(Object), config)
+    expect(mocks.getLocalConfig).toHaveBeenCalledTimes(1)
+    // The summary reuses the export's narrowed session ref instead of
+    // re-resolving one of its own.
+    expect(mocks.fetchSubtitlesSummary).toHaveBeenCalledWith(expect.any(Object), config, {
+      kind: "local",
+      config: DEFAULT_PROVIDER_CONFIG.openai,
+    })
     expect(mocks.translateSubtitles).toHaveBeenNthCalledWith(
       1,
       fragments.slice(0, 5),
@@ -185,11 +204,11 @@ describe("translatedSubtitlesDownloader", () => {
       expect.any(Object),
     )
 
-    resolvers[1](translated(fragments.slice(5, 10)))
+    resolvers[1]!(translated(fragments.slice(5, 10)))
     await vi.waitFor(() => expect(activeBatches).toBe(1))
     expect(mocks.translateSubtitles).toHaveBeenCalledTimes(2)
 
-    resolvers[0](translated(fragments.slice(0, 5)))
+    resolvers[0]!(translated(fragments.slice(0, 5)))
     await vi.waitFor(() => expect(mocks.translateSubtitles).toHaveBeenCalledTimes(3))
     expect(mocks.translateSubtitles).toHaveBeenNthCalledWith(
       3,
@@ -198,7 +217,7 @@ describe("translatedSubtitlesDownloader", () => {
       expect.any(Object),
     )
 
-    resolvers[2](translated(fragments.slice(10)))
+    resolvers[2]!(translated(fragments.slice(10)))
     await download
 
     expect(mocks.downloadSubtitlesAsSrt).toHaveBeenCalledWith(
@@ -229,7 +248,7 @@ describe("translatedSubtitlesDownloader", () => {
     await download
 
     expect(mocks.downloadSubtitlesAsSrt).not.toHaveBeenCalled()
-    expect(mocks.toastError).toHaveBeenCalledWith("Batch failed")
+    expect(mocks.toastAdd).toHaveBeenCalledWith({ type: "error", title: "Batch failed" })
     expect(status()).toEqual({ phase: TranslatedDownloadPhase.Idle, progress: null })
 
     finishSlowBatch(translated(fragments.slice(5)))
@@ -252,12 +271,28 @@ describe("translatedSubtitlesDownloader", () => {
     await createDownloader(fragments).downloader.download()
 
     expect(mocks.downloadSubtitlesAsSrt).not.toHaveBeenCalled()
-    expect(mocks.toastError).toHaveBeenCalledWith("subtitles.errors.translatedExportIncomplete")
+    expect(mocks.toastAdd).toHaveBeenCalledWith({
+      type: "error",
+      title: "subtitles.errors.translatedExportIncomplete",
+    })
     expect(status()).toEqual({ phase: TranslatedDownloadPhase.Idle, progress: null })
   })
 
+  it("rejects export of a track in another region of the target language", async () => {
+    // A pt-PT track for a pt-BR reader: one language, as on pages.
+    mocks.getLocalConfig.mockResolvedValue(createConfig({ targetCode: "pt-BR" }))
+
+    await createDownloader(lines(1), true, "pt-PT").downloader.download()
+
+    expect(mocks.translateSubtitles).not.toHaveBeenCalled()
+    expect(mocks.toastAdd).toHaveBeenCalledWith({
+      type: "error",
+      title: "subtitles.errors.translatedExportSameLanguage",
+    })
+  })
+
   it("rejects same-language export before showing the preparing state", async () => {
-    mocks.sendMessage.mockResolvedValue(createConfig({ targetCode: "eng" }))
+    mocks.getLocalConfig.mockResolvedValue(createConfig({ targetCode: "en" }))
     const statuses: Array<ReturnType<typeof status>> = []
     const unsubscribe = subtitlesStore.sub(translatedSubtitlesDownloadStatusAtom, () =>
       statuses.push(status()),
@@ -267,7 +302,10 @@ describe("translatedSubtitlesDownloader", () => {
     unsubscribe()
 
     expect(mocks.translateSubtitles).not.toHaveBeenCalled()
-    expect(mocks.toastError).toHaveBeenCalledWith("subtitles.errors.translatedExportSameLanguage")
+    expect(mocks.toastAdd).toHaveBeenCalledWith({
+      type: "error",
+      title: "subtitles.errors.translatedExportSameLanguage",
+    })
     expect(statuses).toEqual([
       { phase: TranslatedDownloadPhase.Checking, progress: null },
       { phase: TranslatedDownloadPhase.Idle, progress: null },
@@ -313,18 +351,18 @@ describe("translatedSubtitlesDownloader", () => {
     const newDownload = downloader.download()
     await vi.waitFor(() => expect(mocks.translateSubtitles).toHaveBeenCalledTimes(4))
     await newDownload
-    finishOldTranslations[0](translated(fragments.slice(0, 5)))
-    finishOldTranslations[1](translated(fragments.slice(5)))
+    finishOldTranslations[0]!(translated(fragments.slice(0, 5)))
+    finishOldTranslations[1]!(translated(fragments.slice(5)))
     await oldDownload
 
     expect(fetcher.fetch).toHaveBeenCalledTimes(2)
     expect(mocks.downloadSubtitlesAsSrt).toHaveBeenCalledTimes(1)
-    expect(mocks.toastError).not.toHaveBeenCalled()
+    expect(mocks.toastAdd).not.toHaveBeenCalled()
     expect(status().phase).toBe(TranslatedDownloadPhase.Complete)
   })
 
   it("falls back to optimized source timing when AI segmentation fails", async () => {
-    mocks.sendMessage.mockResolvedValue(createConfig({ aiSegmentation: true }))
+    mocks.getLocalConfig.mockResolvedValue(createConfig({ aiSegmentation: true }))
     mocks.aiSegmentBlock.mockRejectedValue(new Error("Segmentation failed"))
 
     await createDownloader(
@@ -343,6 +381,40 @@ describe("translatedSubtitlesDownloader", () => {
     )
   })
 
+  it("never sends a translate-only provider on a doomed segmentation prompt", async () => {
+    // Google resolves fine for videoSubtitles — the capability gate is the
+    // wider translate one — but it has no model to prompt, so the export must
+    // take the rule-based path without one aiSegmentBlock round trip per chunk.
+    mocks.getLocalConfig.mockResolvedValue(createConfig({ aiSegmentation: true }))
+    mocks.resolveSubtitlesProviderRef.mockResolvedValue({
+      kind: "local",
+      config: DEFAULT_PROVIDER_CONFIG["google-translate"],
+    })
+
+    await createDownloader(
+      [
+        { text: "Hello.", start: 0, end: 1000 },
+        { text: "World.", start: 1000, end: 2000 },
+      ],
+      false,
+    ).downloader.download()
+
+    expect(mocks.aiSegmentBlock).not.toHaveBeenCalled()
+    // The summary is a generation too: the downloader hands it a null session
+    // ref rather than letting it re-resolve the unpromptable provider.
+    expect(mocks.fetchSubtitlesSummary).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      null,
+    )
+    expect(mocks.downloadSubtitlesAsSrt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subtitles: [{ text: "zh:Hello. World.", start: 0, end: 2000 }],
+      }),
+    )
+    expect(status().phase).toBe(TranslatedDownloadPhase.Complete)
+  })
+
   it("retries unsafe AI segmentation with smaller chunks before falling back", async () => {
     const source = [
       {
@@ -358,7 +430,7 @@ describe("translatedSubtitlesDownloader", () => {
     ]
     const retryFirst = [{ ...source[0], text: "Retried first half." }]
     const retrySecond = [{ ...source[1], text: "Retried second half." }]
-    mocks.sendMessage.mockResolvedValue(createConfig({ aiSegmentation: true }))
+    mocks.getLocalConfig.mockResolvedValue(createConfig({ aiSegmentation: true }))
     mocks.aiSegmentBlock
       .mockResolvedValueOnce([{ text: "Collapsed.", start: 0, end: 1 }])
       .mockResolvedValueOnce(retryFirst)
@@ -383,7 +455,7 @@ describe("translatedSubtitlesDownloader", () => {
   it("falls back to optimized source timing when AI segmentation creates overlapping export cues", async () => {
     const questionText =
       "I was wondering whether you have tested scaling laws when source text is transformed into image inputs across many different controlled experiments."
-    mocks.sendMessage.mockResolvedValue(createConfig({ aiSegmentation: true }))
+    mocks.getLocalConfig.mockResolvedValue(createConfig({ aiSegmentation: true }))
     mocks.aiSegmentBlock.mockResolvedValue([
       { text: "Hello.", start: 0, end: 3420 },
       { text: questionText, start: 500, end: 3420 },
@@ -408,7 +480,7 @@ describe("translatedSubtitlesDownloader", () => {
   })
 
   it("falls back when optimization hides a raw collapsed AI segment", async () => {
-    mocks.sendMessage.mockResolvedValue(createConfig({ aiSegmentation: true }))
+    mocks.getLocalConfig.mockResolvedValue(createConfig({ aiSegmentation: true }))
     mocks.aiSegmentBlock.mockResolvedValue([
       { text: "Hi.", start: 500, end: 501 },
       { text: "OK.", start: 501, end: 1000 },
@@ -433,7 +505,7 @@ describe("translatedSubtitlesDownloader", () => {
   it("falls back to optimized source timing when AI segmentation collapses a cue to a boundary", async () => {
     const followUpText =
       "Actually this next cue contains enough words that it should remain separate from the short greeting during subtitle optimization across many different transcript timing examples."
-    mocks.sendMessage.mockResolvedValue(createConfig({ aiSegmentation: true }))
+    mocks.getLocalConfig.mockResolvedValue(createConfig({ aiSegmentation: true }))
     mocks.aiSegmentBlock.mockResolvedValue([
       { text: "Hi.", start: 500, end: 501 },
       { text: followUpText, start: 501, end: 3500 },

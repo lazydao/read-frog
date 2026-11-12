@@ -10,6 +10,7 @@ import {
 import {
   isDontWalkIntoAndDontTranslateAsChildElement,
   isDontWalkIntoButTranslateAsChildElement,
+  isInlineAtomElement,
   isShallowBlockHTMLElement,
   isShallowInlineHTMLElement,
   isTranslatedContentNode,
@@ -107,7 +108,7 @@ describe("inline/block display detection", () => {
 })
 
 function createConfig(range: "main" | "all"): Config {
-  return { translate: { page: { range } } } as unknown as Config
+  return { pageTranslation: { page: { range } } } as unknown as Config
 }
 
 function setHost(host: string) {
@@ -154,6 +155,42 @@ describe("isDontWalkIntoAndDontTranslateAsChildElement", () => {
     expect(isDontWalkIntoAndDontTranslateAsChildElement(element, DEFAULT_CONFIG)).toBe(true)
   })
 
+  it("should block an element the hidden attribute actually hides", () => {
+    setHost("non-configured-example.org")
+    const element = document.createElement("div")
+    element.hidden = true
+    element.textContent = "Collapsed menu"
+    document.body.appendChild(element)
+
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(element, DEFAULT_CONFIG)).toBe(true)
+    element.remove()
+  })
+
+  // science.nasa.gov ships its secondary nav inside `<div hidden>` restyled
+  // to `display: block` (#1474).
+  it("should not block a hidden-attribute element that author CSS displays", () => {
+    setHost("non-configured-example.org")
+    const element = document.createElement("div")
+    element.hidden = true
+    element.style.display = "block"
+    element.innerHTML = '<nav><a href="/missions">Science Missions</a></nav>'
+    document.body.appendChild(element)
+
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(element, DEFAULT_CONFIG)).toBe(false)
+    element.remove()
+  })
+
+  it('should block hidden="until-found" content until the browser reveals it', () => {
+    setHost("non-configured-example.org")
+    const element = document.createElement("div")
+    element.setAttribute("hidden", "until-found")
+    element.textContent = "Collapsed section"
+    document.body.appendChild(element)
+
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(element, DEFAULT_CONFIG)).toBe(true)
+    element.remove()
+  })
+
   it("should still block Twitch aria-hidden chat decorations through the built-in site rule", () => {
     setHost("www.twitch.tv")
     const container = document.createElement("div")
@@ -178,6 +215,7 @@ describe("isDontWalkIntoAndDontTranslateAsChildElement", () => {
       id: "pre-prose",
       matches: "pre-prose.example",
       includeSelectors: ["article > pre"],
+      "dontWalkTags.remove": ["PRE"],
     })
     const article = document.createElement("article")
     const element = document.createElement("pre")
@@ -233,6 +271,109 @@ describe("isDontWalkIntoAndDontTranslateAsChildElement", () => {
 
     expect(isDontWalkIntoButTranslateAsChildElement(element, config)).toBe(true)
     expect(isDontWalkIntoAndDontTranslateAsChildElement(element, config)).toBe(false)
+  })
+
+  it("should treat atomSelectors as inline atoms that also block the walk", () => {
+    setHost("atom-example.org")
+    const config = configWithSiteRule({
+      id: "atoms",
+      matches: "atom-example.org",
+      atomSelectors: [".formula"],
+    })
+    const element = document.createElement("span")
+    element.classList.add("formula")
+
+    expect(isInlineAtomElement(element, config)).toBe(true)
+    expect(isDontWalkIntoButTranslateAsChildElement(element, config)).toBe(true)
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(element, config)).toBe(false)
+
+    const plain = document.createElement("span")
+    expect(isInlineAtomElement(plain, config)).toBe(false)
+  })
+
+  it("should treat native <math> roots as inline atoms without any rule", () => {
+    setHost("atom-example.org")
+    const container = document.createElement("div")
+    container.innerHTML = "<math><mi>x</mi></math>"
+    const math = container.firstElementChild as HTMLElement
+
+    expect(isInlineAtomElement(math, DEFAULT_CONFIG)).toBe(true)
+    // Nested MathML nodes are not roots.
+    expect(isInlineAtomElement(math.firstElementChild as HTMLElement, DEFAULT_CONFIG)).toBe(false)
+  })
+
+  it("should let atomSelectors.remove turn a built-in atom off", () => {
+    setHost("atom-example.org")
+    const config = configWithSiteRule({
+      id: "no-katex-atoms",
+      matches: "atom-example.org",
+      "atomSelectors.remove": ["span.katex"],
+    })
+    const katex = document.createElement("span")
+    katex.classList.add("katex")
+
+    expect(isInlineAtomElement(katex, config)).toBe(false)
+    expect(isInlineAtomElement(katex, DEFAULT_CONFIG)).toBe(true)
+  })
+
+  it("should walk a display: none walkHiddenSelectors region but not what it hides on its own", () => {
+    setHost("menu-example.org")
+    const config = configWithSiteRule({
+      id: "css-menu",
+      matches: "menu-example.org",
+      walkHiddenSelectors: [".dropdown"],
+    })
+    document.body.innerHTML = `
+      <div class="dropdown" style="display: none">
+        <a id="item">Down jackets</a>
+        <a id="back" style="display: none">Back</a>
+      </div>
+      <div id="elsewhere" style="display: none">Hidden elsewhere</div>
+    `
+    const dropdown = document.querySelector<HTMLElement>(".dropdown")!
+
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(dropdown, config)).toBe(false)
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(dropdown, DEFAULT_CONFIG)).toBe(true)
+    expect(
+      isDontWalkIntoAndDontTranslateAsChildElement(document.getElementById("item")!, config),
+    ).toBe(false)
+    expect(
+      isDontWalkIntoAndDontTranslateAsChildElement(document.getElementById("back")!, config),
+    ).toBe(true)
+    expect(
+      isDontWalkIntoAndDontTranslateAsChildElement(document.getElementById("elsewhere")!, config),
+    ).toBe(true)
+    document.body.innerHTML = ""
+  })
+
+  it("should waive visibility: hidden inherited from a walkHiddenSelectors region", () => {
+    setHost("menu-example.org")
+    const config = configWithSiteRule({
+      id: "css-menu",
+      matches: "menu-example.org",
+      walkHiddenSelectors: [".dropdown"],
+    })
+    document.body.innerHTML = `
+      <div class="dropdown" style="visibility: hidden">
+        <ul><li id="item">Down jackets</li></ul>
+      </div>
+      <div style="visibility: hidden"><p id="elsewhere">Hidden elsewhere</p></div>
+    `
+    const item = document.getElementById("item")!
+
+    expect(getComputedStyle(item).visibility).toBe("hidden")
+    expect(
+      isDontWalkIntoAndDontTranslateAsChildElement(
+        document.querySelector<HTMLElement>(".dropdown")!,
+        config,
+      ),
+    ).toBe(false)
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(item, config)).toBe(false)
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(item, DEFAULT_CONFIG)).toBe(true)
+    expect(
+      isDontWalkIntoAndDontTranslateAsChildElement(document.getElementById("elsewhere")!, config),
+    ).toBe(true)
+    document.body.innerHTML = ""
   })
 
   it("should skip top-level <header> in main mode", () => {
@@ -299,5 +440,89 @@ describe("isDontWalkIntoAndDontTranslateAsChildElement", () => {
     document.body.appendChild(nav)
     expect(isDontWalkIntoAndDontTranslateAsChildElement(nav, createConfig("main"))).toBe(true)
     document.body.removeChild(nav)
+  })
+})
+
+describe("site-rule tag-set overrides", () => {
+  it("unblocks CODE via dontWalkButTranslateTags.remove while config-less calls keep the default", () => {
+    setHost("tagset-example.org")
+    const config = configWithSiteRule({
+      id: "tagset",
+      matches: "tagset-example.org",
+      "dontWalkButTranslateTags.remove": ["CODE"],
+    })
+    const code = document.createElement("code")
+
+    expect(isDontWalkIntoButTranslateAsChildElement(code, config)).toBe(false)
+    expect(isDontWalkIntoButTranslateAsChildElement(code)).toBe(true)
+  })
+
+  it("keeps notranslate blocking even when CODE is removed", () => {
+    setHost("tagset-example.org")
+    const config = configWithSiteRule({
+      id: "tagset",
+      matches: "tagset-example.org",
+      "dontWalkButTranslateTags.remove": ["CODE"],
+    })
+    const code = document.createElement("code")
+    code.classList.add(NOTRANSLATE_CLASS)
+
+    expect(isDontWalkIntoButTranslateAsChildElement(code, config)).toBe(true)
+  })
+
+  it("blocks extra tags via dontWalkTags.add", () => {
+    setHost("tagset-example.org")
+    const config = configWithSiteRule({
+      id: "tagset",
+      matches: "tagset-example.org",
+      "dontWalkTags.add": ["ASIDE"],
+    })
+    const aside = document.createElement("aside")
+
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(aside, config)).toBe(true)
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(aside, DEFAULT_CONFIG)).toBe(false)
+  })
+
+  it("keeps SCRIPT blocked despite a protected removal attempt", () => {
+    setHost("tagset-example.org")
+    const config = configWithSiteRule({
+      id: "tagset",
+      matches: "tagset-example.org",
+      "dontWalkTags.remove": ["SCRIPT"],
+    })
+    const script = document.createElement("script")
+
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(script, config)).toBe(true)
+  })
+
+  it("honors mainContentIgnoreTags.remove in main-content mode", () => {
+    setHost("tagset-example.org")
+    const config = configWithSiteRule({
+      id: "tagset",
+      matches: "tagset-example.org",
+      "mainContentIgnoreTags.remove": ["NAV"],
+    })
+    config.pageTranslation.page.range = "main"
+    const nav = document.createElement("nav")
+    document.body.appendChild(nav)
+
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(nav, config)).toBe(false)
+    expect(isDontWalkIntoAndDontTranslateAsChildElement(nav, createConfig("main"))).toBe(true)
+    document.body.removeChild(nav)
+  })
+
+  it("forces SPAN to block classification via forceBlockTags.add", () => {
+    setHost("tagset-example.org")
+    const config = configWithSiteRule({
+      id: "tagset",
+      matches: "tagset-example.org",
+      "forceBlockTags.add": ["SPAN"],
+    })
+    const span = document.createElement("span")
+    span.textContent = "text"
+
+    expect(isShallowBlockHTMLElement(span, undefined, config)).toBe(true)
+    expect(isShallowInlineHTMLElement(span, undefined, config)).toBe(false)
+    expect(isShallowBlockHTMLElement(span)).toBe(false)
   })
 })

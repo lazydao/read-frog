@@ -2,16 +2,16 @@
 
 ## Build Environment
 
-- **Node.js**: >= 22.22.0
-- **pnpm**: 10.30.2 (auto-installed via corepack)
+- **Node.js**: ^26.7.0 (installed automatically by pnpm from the `devEngines.runtime` field)
+- **pnpm**: 12.3.4 (pinned by the `packageManager` field in `package.json`)
 
 ## Build Steps
 
 ```bash
-# 1. Enable corepack (ships with Node.js) to auto-install the correct pnpm version
-corepack enable
+# 1. Install pnpm if it is not already available
+npx get-pnpm
 
-# 2. Install dependencies
+# 2. Install dependencies using the version pinned in package.json
 pnpm install --frozen-lockfile
 
 # 3. Build the Firefox extension

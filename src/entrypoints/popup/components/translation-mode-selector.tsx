@@ -1,10 +1,14 @@
 import type { TranslationMode as TranslationModeType } from "@/types/config/translate"
 import { Icon } from "@iconify/react"
-import { useAtom } from "jotai"
+import { useAtom, useAtomValue } from "jotai"
 import { Button } from "@/components/ui/base-ui/button"
+import { Kbd, KbdGroup } from "@/components/ui/base-ui/kbd"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/base-ui/tooltip"
-import { configFieldsAtomMap } from "@/utils/atoms/config"
+import { configAtom, configFieldsAtomMap } from "@/utils/atoms/config"
 import { i18n } from "@/utils/i18n"
+import { formatHotkeyParts } from "@/utils/os"
+import { getTranslationOnlyBlockedReason } from "@/utils/providers/translation-only-gate"
+import { isShortcutEmpty } from "@/utils/shortcut"
 import { cn } from "@/utils/styles/utils"
 
 const TABLER_ICON_STROKE_WIDTH_CLASS = "[&_path]:[stroke-width:1.2]"
@@ -31,14 +35,26 @@ const MODE_TOOLTIP_KEY = {
 } as const
 
 export default function TranslationModeSelector() {
-  const [translateConfig, setTranslateConfig] = useAtom(configFieldsAtomMap.translate)
+  const [translateConfig, setTranslateConfig] = useAtom(configFieldsAtomMap.pageTranslation)
+  const config = useAtomValue(configAtom)
   const currentMode = translateConfig.mode
   const currentModeIcon = MODE_ICON[currentMode]
   const nextMode = NEXT_MODE[currentMode]
   const tooltipKey = MODE_TOOLTIP_KEY[currentMode]
+  // Entering translationOnly is blocked while the page-translate provider has
+  // no markup support (translation-only-gate.ts). Native `disabled` would
+  // swallow the hover events the tooltip needs, so the button stays focusable
+  // and the click becomes a no-op with the reason shown in the tooltip.
+  const blockedReason =
+    nextMode === "translationOnly" ? getTranslationOnlyBlockedReason(config) : null
+  const nextModeBlocked = blockedReason !== null
   const actionLabel = i18n.t(tooltipKey.action)
+  const shortcutParts = isShortcutEmpty(translateConfig.modeShortcut)
+    ? []
+    : formatHotkeyParts(translateConfig.modeShortcut)
 
   const handleModeToggle = () => {
+    if (nextModeBlocked) return
     void setTranslateConfig({ mode: nextMode })
   }
 
@@ -51,6 +67,8 @@ export default function TranslationModeSelector() {
             variant="outline"
             size="icon"
             aria-label={actionLabel}
+            aria-disabled={nextModeBlocked || undefined}
+            className={cn(nextModeBlocked && "cursor-not-allowed opacity-50")}
             onClick={handleModeToggle}
           />
         }
@@ -60,10 +78,19 @@ export default function TranslationModeSelector() {
           className={cn(currentModeIcon.className, currentMode === "translationOnly" && "size-4.5")}
         />
       </TooltipTrigger>
-      <TooltipContent>
-        <div className="whitespace-nowrap">
+      <TooltipContent className="has-data-[slot=kbd]:pr-3">
+        {/* The blocked-reason line is much longer than the mode labels; let it
+            wrap inside the 320px popup instead of forcing one clipped line. */}
+        <div className={cn("whitespace-nowrap", nextModeBlocked && "max-w-64 whitespace-normal")}>
           <p>{i18n.t(tooltipKey.current)}</p>
-          <p>{actionLabel}</p>
+          {nextModeBlocked ? <p>{blockedReason}</p> : <p>{actionLabel}</p>}
+          {!nextModeBlocked && shortcutParts.length > 0 && (
+            <KbdGroup className="mt-1.5">
+              {shortcutParts.map((part) => (
+                <Kbd key={part}>{part}</Kbd>
+              ))}
+            </KbdGroup>
+          )}
         </div>
       </TooltipContent>
     </Tooltip>

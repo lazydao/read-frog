@@ -38,10 +38,42 @@
     ]
   },
   {
+    "id": "readfrog-atom-defaults",
+    "description": "Keep rendered inline formulas and LaTeXML inline code as opaque atoms inside translations",
+    "matches": "*",
+    "atomSelectors": [
+      "span.katex",
+      "mjx-container",
+      ".MathJax",
+      ".MathJax_SVG",
+      ".MathJax_CHTML",
+      ".MathJax_Preview",
+      ".MathJax_Display",
+      "math-renderer",
+      "[aria-labelledby^=\"MathJax-SVG\"]",
+      ".mwe-math-element",
+      ".ltx_Math",
+      "span.ltx_lstlisting:not(.ltx_listing)",
+      "span.math.inline",
+      "span.math.display",
+      ".mathjax-block",
+      "span.pretex-inline",
+      "span.math-inline"
+    ]
+  },
+  {
+    "id": "readfrog-plain-text-document",
+    "description": "A browser shows a .txt or .md file as one generated <pre> holding the whole file, which the default PRE block would skip entirely. Walk it so the text translates one blank-line paragraph at a time. Matches on document type, on any URL including local files and data: or blob: frames; an authored <pre> in an HTML page stays blocked. Site and user rules come later and can block PRE again with dontWalkTags.add",
+    "matches": "<all_urls>",
+    "contentTypes": ["text/plain", "text/markdown", "text/x-markdown"],
+    "dontWalkTags.remove": ["PRE"]
+  },
+  {
     "id": "antirez",
     "description": "Translate antirez article prose stored in a pre element",
     "matches": "antirez.com/news/*",
-    "includeSelectors": ["article > h2", "article.comment > pre"]
+    "includeSelectors": ["article > h2", "article.comment > pre"],
+    "dontWalkTags.remove": ["PRE"]
   },
   {
     "id": "pdf",
@@ -88,9 +120,7 @@
       "#p-associated-pages",
       ".vector-header"
     ],
-    "forceInlineSelectors": [".chemf", ".mwe-math-element", "[role=math]", ".nowrap"],
-    "minCharacters": 4,
-    "minWords": 2,
+    "forceInlineStyleSelectors": [".chemf", ".mwe-math-element", "[role=math]", ".nowrap"],
     "injectedCss": ".read-frog-translated-content-wrapper {content-visibility:auto;}\n.no-article-text-sister-projects li { height:unset; }",
     "excludeSelectors.add": [".lazy-image-placeholder"],
     "preserveTextSelectors": [".chemf", ".mwe-math-element", "[role=math]", ".nowrap"],
@@ -151,9 +181,10 @@
       "[data-testid='inlinePrompt']",
       "span[class='css-1jxf684 r-bcqeeo r-1ttztb7 r-qvutc0 r-poiln3 r-n6v787 r-1cwl3u0']",
       "[data-testid=primaryColumn] [class='css-175oi2r r-kzbkwu r-3pj75a'] > div > span[class='css-1jxf684 r-bcqeeo r-1ttztb7 r-qvutc0 r-poiln3']",
-      ".font-chirp.text-body.font-normal"
+      ".font-chirp.text-body.font-normal",
+      "main [dir=auto].whitespace-pre-wrap"
     ],
-    "forceInlineSelectors": [
+    "forceInlineStyleSelectors": [
       "[data-testid=\"tweetText\"] div.r-xoduu5",
       "[data-testid=\"tweetText\"] span",
       "[data-testid=\"UserDescription\"] div",
@@ -182,9 +213,11 @@
       "h2[role=heading]",
       "[class='css-175oi2r r-1awozwy r-18u37iz r-1wtj0ep r-6gpygo'],[class='css-175oi2r r-1d09ksm r-18u37iz r-1wbh5a2 r-1471scf'],[class='css-175oi2r r-1kbdv8c r-18u37iz r-1wtj0ep r-1ye8kvj r-1s2bzr4']",
       ".imt-caption-container *",
-      "[data-testid=videoComponent]"
+      "[data-testid=videoComponent]",
+      "main [dir=auto].whitespace-pre-wrap > button"
     ],
-    "forceBlockSelectors.add": ["[data-testid=\"tweetText\"] div.r-6koalj"],
+    "forceBlockNodeSelectors.add": ["[data-testid=\"tweetText\"] div.r-6koalj"],
+    "forceBlockStyleSelectors.add": ["[data-testid=\"tweetText\"] div.r-6koalj"],
     "preserveTextSelectors.add": [
       "[data-testid=\"tweetText\"] a",
       "[data-testid='UserDescription'] a",
@@ -199,7 +232,8 @@
       "[data-testid='tweetText'],[style*='-webkit-line-clamp'] {-webkit-line-clamp: unset!important;}",
       "[role=dialog] [style*='webkit-line-clamp'] {-webkit-line-clamp: unset!important;}",
       ".r-h9hxbl{width:unset;}",
-      "[aria-label=Grok] [data-testid=ScrollSnap-SwipeableList] [role=presentation] > div > div { max-height: unset !important; }"
+      "[aria-label=Grok] [data-testid=ScrollSnap-SwipeableList] [role=presentation] > div > div { max-height: unset !important; }",
+      "main [dir=auto].whitespace-pre-wrap[class*='line-clamp-']:has(.read-frog-translated-content-wrapper) {-webkit-line-clamp: unset!important;}"
     ]
   },
   {
@@ -211,7 +245,7 @@
     "id": "zoom",
     "matches": "*.zoom.us",
     "excludeSelectors.add": [".live-transcription-subtitle__box"],
-    "forceInlineSelectors.add": [".live-transcription-subtitle__item"]
+    "forceInlineStyleSelectors.add": [".live-transcription-subtitle__item"]
   },
   {
     "id": "team",
@@ -221,14 +255,14 @@
       "[data-tid='author']",
       ".fui-ChatMessageCompact__author"
     ],
-    "forceInlineSelectors.add": ["[data-tid='closed-caption-text']"],
+    "forceInlineStyleSelectors.add": ["[data-tid='closed-caption-text']"],
     "preserveTextSelectors.add": ["span[title][style='min-width: 20px; height: 20px;']"]
   },
   {
     "id": "googleMeet",
     "matches": "meet.google.com",
     "excludeSelectors.add": [".iOzk7[jsname='dsyhDe']", ".ygicle.VbkSUe"],
-    "forceInlineSelectors.add": [".ygicle.VbkSUe"]
+    "forceInlineStyleSelectors.add": [".ygicle.VbkSUe"]
   },
   {
     "id": "openrouter",
@@ -263,7 +297,11 @@
       ".mhy-user-card__name",
       ".mhy-account-title__name"
     ],
-    "forceBlockSelectors.add": [
+    "forceBlockNodeSelectors.add": [
+      ".reply-card__content__detail p:first-child",
+      ".reply-card-inner-reply__content > p:first-child"
+    ],
+    "forceBlockStyleSelectors.add": [
       ".reply-card__content__detail p:first-child",
       ".reply-card-inner-reply__content > p:first-child"
     ]
@@ -271,7 +309,7 @@
   {
     "id": "chatter.hume.ai",
     "matches": "chatter.hume.ai",
-    "forceInlineSelectors.add": ["[class*=' flex-wrap'] > span"]
+    "forceInlineStyleSelectors.add": ["[class*=' flex-wrap'] > span"]
   },
   {
     "id": "threads",
@@ -279,7 +317,7 @@
     "injectedCss": "span,.x569fbc { max-height:unset;-webkit-line-clamp:unset;height:unset;white-space:unset; }",
     "excludeSelectors.add": [
       ".x6s0dn4.x40hh3e.xrvj5dj.xxfwaov",
-      ".x6s0dn4.x78zum5",
+      ".x6s0dn4.x78zum5:not(:has([data-pressable-container]))",
       ".xpvyfi4.x1xdureb.x1agbcgv,.xqcrz7y.x1xdureb.x1agbcgv",
       ".xpvyfi4.x1npkx4u.x1ms6mhf"
     ],
@@ -317,7 +355,8 @@
       ".s-post-summary--stats",
       ".s-post-summary--meta"
     ],
-    "forceBlockSelectors.add": ["span.comment-copy"]
+    "forceBlockNodeSelectors.add": ["span.comment-copy"],
+    "forceBlockStyleSelectors.add": ["span.comment-copy"]
   },
   {
     "id": "appleDeveloper",
@@ -545,6 +584,7 @@
       "[app-name='blackbird-search'] [data-hpc='true']",
       ".topic-box > a > p:nth-of-type(2)",
       "[data-testid=\"listitem-title-link\"]",
+      "[data-testid=\"issue-listitem-title-link\"]",
       "#repo-content-turbo-frame p",
       "#repo-content-turbo-frame h4",
       "[aria-label=\"card content\"] .flex-column > div:nth-child(2)",
@@ -586,9 +626,10 @@
       "[class='col-lg-9 position-relative pr-lg-5 mb-6 mr-lg-5']",
       "[class*='IssueIndexPage-module__middlePaneGrid'] div[class='p-4 text-center rounded-2 border color-border-muted']",
       "[class*='ModelsPlaygroundRoute-module__playgroundContainer']",
-      "article [class='f6 color-fg-muted mt-1']"
+      "article [class='f6 color-fg-muted mt-1']",
+      ".repos-list-description"
     ],
-    "forceInlineSelectors": ["g-emoji", "a.anchor"],
+    "forceInlineStyleSelectors": ["g-emoji", "a.anchor"],
     "injectedCss": ".TimelineItem-body .Link--primary { -webkit-line-clamp: unset; }",
     "excludeSelectors.add": [
       "a[data-hovercard-type]",
@@ -621,7 +662,8 @@
       "h1[data-component=PH_Title] span[class*='issueNumberText']",
       "[data-testid=list-row-repo-name-and-number]"
     ],
-    "forceBlockSelectors.add": ["bdi"],
+    "forceBlockNodeSelectors.add": ["bdi"],
+    "forceBlockStyleSelectors.add": ["bdi"],
     "preserveTextSelectors.add": [
       ".issue-link",
       ".markdown-body a[data-hovercard-type='pull_request']",
@@ -632,7 +674,8 @@
       ".bpDald,.discussion-title {-webkit-line-clamp:unset!important;}",
       "li>div[class*='Box-sc'],div[class*='Box-sc']>button[class*='prc-Token-TokenBase'],li[class*='card-label-module']>button[class*='prc-Token-TokenBase'] {height:unset!important;}",
       "#memex-project-view-root [class*=table-row__StyledTableRow-sc],#memex-project-view-root [class*=base-cell-module__Box] {height:unset!important;}",
-      "[class*='GridCard-module__description'] {-webkit-line-clamp: unset;}"
+      "[class*='GridCard-module__description'] {-webkit-line-clamp: unset;}",
+      ".repos-list-description:has(.read-frog-translated-content-wrapper) [class*='prc-Truncate-Truncate'] {white-space: normal!important;overflow: visible!important;}"
     ]
   },
   {
@@ -727,7 +770,8 @@
       ".imt-caption-container",
       "ytd-live-chat-frame"
     ],
-    "forceBlockSelectors.add": [".caption-visual-line"]
+    "forceBlockNodeSelectors.add": [".caption-visual-line"],
+    "forceBlockStyleSelectors.add": [".caption-visual-line"]
   },
   {
     "id": "twitch",
@@ -747,6 +791,7 @@
       "yt-formatted-string.ytd-video-renderer",
       "yt-formatted-string#content-text",
       "h1",
+      "yt-formatted-string.ytd-watch-metadata",
       "yt-formatted-string#video-title",
       ".ytLockupMetadataViewModelTitle,.shortsLockupViewModelHostOutsideMetadataTitle",
       "yt-formatted-string.span",
@@ -767,6 +812,9 @@
       "#commentCanvas .cmt",
       ".ytwTranscriptSegmentViewModelHost"
     ],
+    "injectedCss.add": [
+      "yt-formatted-string.ytd-watch-metadata {-webkit-line-clamp: unset !important;max-height: unset !important;}"
+    ],
     "injectedCss": ".read-frog-translated-content-wrapper img { width: 16px; height: 16px }\n.metadata-snippet-container {max-height: unset !important;}\n.read-frog-translated-content-wrapper {text-align: left;}\n.read-frog-translated-content-wrapper[dir=rtl] {text-align: right;}\n#commentCanvas .cmt {display:flex;flex-direction: column;}\n#commentCanvas .cmt font br {display: none;}\n#video-title,h1.ytd-watch-metadata,.ytd-video-renderer,.yt-lockup-metadata-view-model-wiz__title {-webkit-line-clamp: unset !important;max-height: unset !important;}\nyt-formatted-string#video-title,.ShortsLockupViewModelHostOutsideMetadataTitle {-webkit-line-clamp: unset !important;max-height: unset !important;}\nytd-expander.ytd-comment-renderer {--ytd-expander-max-lines: 1000;}\n.page-header-view-model-wiz__page-header-title--page-header-title-large {-webkit-line-clamp: unset !important;max-height: unset !important;}\n#title,#video-title,.yt-lockup-metadata-view-model__title,.ytLockupMetadataViewModelTitle,.shortsLockupViewModelHostOutsideMetadataTitle,h1.ytd-watch-metadata,.ytwFeedAdMetadataViewModelHostTextsStyleStandardHeadline {-webkit-line-clamp: unset !important;max-height: unset !important;}",
     "excludeSelectors.add": [
       ".ytp-caption-window-container",
@@ -781,7 +829,11 @@
       "yt-description-preview-view-model button",
       ".yt-page-header-view-model__page-header-title"
     ],
-    "forceBlockSelectors.add": [
+    "forceBlockNodeSelectors.add": [
+      "yt-formatted-string.ytd-transcript-segment-renderer",
+      ".caption-visual-line"
+    ],
+    "forceBlockStyleSelectors.add": [
       "yt-formatted-string.ytd-transcript-segment-renderer",
       ".caption-visual-line"
     ]
@@ -795,7 +847,8 @@
     "id": "youtube-subtitle",
     "matches": ["www.youtube-nocookie.com", "music.youtube.com"],
     "excludeSelectors.add": [".captions-text", ".ytp-caption-segment"],
-    "forceBlockSelectors.add": [".caption-visual-line"]
+    "forceBlockNodeSelectors.add": [".caption-visual-line"],
+    "forceBlockStyleSelectors.add": [".caption-visual-line"]
   },
   {
     "id": "instagramMessage",
@@ -848,6 +901,7 @@
     "id": "substack",
     "matches": ["*.substack.com", "newsletter.rootsofprogress.org", "www.lennysnewsletter.com"],
     "excludeSelectors": [
+      ".shows-video-player-container",
       ".publication-footer",
       ".subscribe-footer",
       ".main-menu",
@@ -864,7 +918,13 @@
       ".comment-actions"
     ],
     "injectedCss": ".reader2-clamp-lines { max-height: unset; -webkit-line-clamp: unset; }\n[class*='clamp-'] { max-height: unset; -webkit-line-clamp:unset; }\n.blurb-text { max-height: unset; }\n.comment-body { max-height: unset; }\n[class*='_hideSelectio'] { overflow: scroll; }",
-    "forceBlockSelectors.add": [
+    "forceBlockNodeSelectors.add": [
+      ".reader2-post-title",
+      ".tweet-link-top",
+      ".tweet-link-bottom",
+      ".expanded-link"
+    ],
+    "forceBlockStyleSelectors.add": [
       ".reader2-post-title",
       ".tweet-link-top",
       ".tweet-link-bottom",
@@ -950,7 +1010,7 @@
       ".gs_fma_wpr",
       "#gs_as_hp_main"
     ],
-    "forceInlineSelectors": ["br"]
+    "forceInlineStyleSelectors": ["br"]
   },
   {
     "id": "googleMail",
@@ -1032,7 +1092,12 @@
     "minCharacters": 4,
     "minWords": 2,
     "excludeSelectors.add": ["[class*='username']", "[class*='repliedMessage']"],
-    "forceBlockSelectors.add": [
+    "forceBlockNodeSelectors.add": [
+      "[class^='embedFieldValue']",
+      "li[class^='card'] div[class^='message']",
+      "[data-list-item-id^='forum-channel-list'] div[class^='headerText']"
+    ],
+    "forceBlockStyleSelectors.add": [
       "[class^='embedFieldValue']",
       "li[class^='card'] div[class^='message']",
       "[data-list-item-id^='forum-channel-list'] div[class^='headerText']"
@@ -1055,18 +1120,24 @@
       ".time",
       ".peer-title",
       ".document-wrapper",
-      ".message.spoilers-container custom-emoji-element"
+      ".message.spoilers-container custom-emoji-element",
+      ".MessageMeta"
     ],
     "includeSelectors": [
       ".text-content",
       ".message",
       ".reply-markup-button-text",
       ".bot-commands-list-element-description",
+      ".message-content-wrapper .Button",
       "[class*='tabs-tab page-password active']",
       "#auth-qr-form"
     ],
     "excludeSelectors.remove": [".notranslate", "[translate=no]"],
-    "forceBlockSelectors.add": [
+    "forceBlockNodeSelectors.add": [
+      ".message.spoilers-container em",
+      ".message.spoilers-container strong"
+    ],
+    "forceBlockStyleSelectors.add": [
       ".message.spoilers-container em",
       ".message.spoilers-container strong"
     ]
@@ -1102,28 +1173,25 @@
   {
     "id": "artstationLearning",
     "matches": "www.artstation.com/learning/courses/*",
-    "excludeSelectors": [".learning-card-meta", ".vjs-text-track-display"],
-    "includeSelectors": ["footer.learning-course-description.ng-star-inserted > span"]
+    "excludeSelectors": [".learning-card-meta", ".vjs-text-track-display"]
   },
   {
     "id": "artstationBlog",
     "matches": ["https://www.artstation.com/blogs", "https://www.artstation.com/blogs/*"],
     "excludeSelectors": [
-      "blog-card-thumbnail",
-      "blog-card-header",
+      ".blog-card-thumbnail",
+      ".blog-card-header",
       ".blog-card-author",
       ".blog-card-meta",
       ".blog-view-header",
       ".blog-grid-title",
       ".post-meta-header"
-    ],
-    "includeSelectors": [".comment-item-body"]
+    ]
   },
   {
     "id": "figmaCommunity",
     "matches": "www.figma.com/community/*",
     "excludeSelectors": ["div[class*='metadataRight']", "div[class*='commentMetaAndOptions']"],
-    "includeSelectors": ["div[class*='mini_cardBottomRow_Metadata']"],
     "injectedCss": "div[class*='mini_cardBottomRowSizing'] { height: 3em; }",
     "preserveTextSelectors": ["[data-tooltip='tooltip-user-info']"]
   },
@@ -1169,7 +1237,8 @@
       "span[data-ts]"
     ],
     "excludeSelectors.add": ["[jscontroller='UsftYd']"],
-    "forceBlockSelectors.add": [".MUFPAc", "[role=heading]"],
+    "forceBlockNodeSelectors.add": [".MUFPAc", "[role=heading]"],
+    "forceBlockStyleSelectors.add": [".MUFPAc", "[role=heading]"],
     "injectedCss.add": [
       ".V82bz,.uAKcGb,.F0FGWb,.Hdw6tb,.M1Sizc,.XVPTd,.Yt787.JGD2rd,.ITZIwc {-webkit-line-clamp: unset!important;max-height: unset!important;}",
       ".pe7FNb {-webkit-line-clamp: unset!important;}",
@@ -1177,26 +1246,37 @@
       "div[data-content-feature='1'] > div {-webkit-line-clamp: unset!important;max-height: unset!important;}",
       "div[style='-webkit-line-clamp:*'] {-webkit-line-clamp: unset!important;max-height: unset!important;}",
       ".Pw4Ldf.RsCEN {height:unset!important;}",
-      ".related-question-pair {overflow:auto!important;}"
+      ".related-question-pair {overflow:auto!important;}",
+      "[role=dialog][data-skip-highlighting] :has(.read-frog-translated-content-wrapper) {-webkit-line-clamp: unset!important;max-height: unset!important;}"
     ]
   },
   {
     "id": "lowendtalk",
+    "description": "Was an include whitelist (headings, post bodies, the sidebar, discussion-list meta) that left category and page descriptions, latest-post titles, search results and comment headers in English. The whole page translates now; the excludes keep out only what machine translation garbles. Usernames get transliterated, so the author block of each post and comment header is excluded whole (.Author: the avatar link's title, the img's alt and the name), because translation-only mode sends a header's run as HTML and swaps the reply into every text node and title/alt under it, and excluding .Username alone left the name inside the serialized .Author. Also kept out: usernames elsewhere; the Thanked by box, a list of names whose `.ThankedBy > span` CSS wraps an inserted translation in parentheses; the In this Discussion list of names and times; and the sidebar category counts",
     "matches": "lowendtalk.com",
-    "excludeSelectors": [".ClearFix .Count"],
-    "includeSelectors": [
-      "[role=heading]",
-      "h1",
-      ".userContent",
-      ".DismissMessage",
-      ".PanelColumn",
-      ".Meta-Discussion"
+    "excludeSelectors": [
+      ".ClearFix .Count",
+      ".Author",
+      ".Username",
+      ".ThankedByBox",
+      ".PanelInThisDiscussion"
     ]
   },
   {
-    "id": "linkedinFeed",
-    "matches": "https://linkedin.com/feed/*",
-    "includeSelectors": ["h1", ".feed-shared-update-v2__description-wrapper"]
+    "id": "linkedin",
+    "description": "Replaces linkedinFeed, whose host was missing www so it never matched; its include whitelist is dropped because both selectors went stale. Keeps that rule's intent (skip page chrome) as excludes. Post/comment bodies collapse at max-height:100px and actor headlines are nowrap+ellipsis, so translations get clipped",
+    "matches": "*.linkedin.com",
+    "excludeSelectors.add": [
+      "#global-nav",
+      ".global-footer-compact",
+      ".ad-banner-container",
+      ".scaffold-layout__sidebar",
+      ".update-components-actor__meta > a:not(.update-components-actor__meta-link)",
+      ".update-components-actor__title"
+    ],
+    "forceBlockNodeSelectors": [".update-components-actor__meta-link"],
+    "forceBlockStyleSelectors": [".update-components-actor__meta-link"],
+    "injectedCss": ".feed-shared-inline-show-more-text,.comments-comment-item__inline-show-more-text { max-height: none !important; }\n.update-components-actor__description,.comments-comment-meta__description-subtitle { white-space: normal !important;text-overflow: clip !important;overflow: visible !important;height: auto !important; }"
   },
   {
     "id": "indiehackers",
@@ -1240,8 +1320,7 @@
   {
     "id": "newyorker",
     "matches": "www.newyorker.com",
-    "excludeSelectors": ["[data-testid=PersistentTop]", "[data-testid=StackedNavigationHeader]"],
-    "includeSelectors": ["h1", "[data-testid=SummaryItemHed]"]
+    "excludeSelectors": ["[data-testid=PersistentTop]", "[data-testid=StackedNavigationHeader]"]
   },
   {
     "id": "typora",
@@ -1261,7 +1340,6 @@
   {
     "id": "scmp",
     "matches": "www.scmp.com",
-    "includeSelectors": [".info__subHeadline", ".section-content h2"],
     "injectedCss": ".topic__article-list { height: unset; }\n.adverisers__adveriser { height: unset; }\n.advertiser__content { height: unset; }\n.content-title__link { display:unset;overflow:unset;-webkit-line-clamp:unset; }\n.title__text { max-height:unset; -webkit-line-clamp:unset; }\n.news-list-item__news-title { max-height:unset; -webkit-line-clamp:unset; }\na[class*='link'] > .link__headline { max-height:unset; -webkit-line-clamp:unset; }"
   },
   {
@@ -1277,7 +1355,8 @@
       ".CommentsTableOfContents-commentAuthor",
       ".CommentBottom-bottom"
     ],
-    "forceBlockSelectors.add": ["span.commentOnSelection"]
+    "forceBlockNodeSelectors.add": ["span.commentOnSelection"],
+    "forceBlockStyleSelectors.add": ["span.commentOnSelection"]
   },
   {
     "id": "mastodon",
@@ -1300,15 +1379,14 @@
   {
     "id": "cnbc",
     "matches": "www.cnbc.com",
-    "injectedCss": "div.Card-titleContainer > div { -webkit-line-clamp: unset;max-height: unset; }",
+    "injectedCss": "div.Card-titleContainer > div { -webkit-line-clamp: unset !important;max-height: unset !important; }",
     "excludeSelectors.add": [
       "#GlobalNavigation",
       "#GlobalFooter",
       ".LiveBlogHeader-timestampAndShareBarContainer",
       ".LiveBlogHeader-liveUpdatesPill",
       ".QuoteInBody-inlineButton"
-    ],
-    "forceBlockSelectors.remove": ["button"]
+    ]
   },
   {
     "id": "dailyDev",
@@ -1321,7 +1399,8 @@
     "matches": ["*.pornhub.com", "pornhub.com"],
     "excludeMatches": ["*.pornhub.com/insights/*", "pornhub.com/insights/*"],
     "injectedCss": "span.title { height:unset; max-height:unset; }\n.detailedInfo { max-height:unset; }\n.pcVideoListItem { max-height:unset; }\n.wrap { height:unset; }\n.entry-header { height:unset; }\n.entry-title > a { height:unset;-webkit-line-clamp:unset; }",
-    "forceBlockSelectors.add": [".trendingNow", ".searchItem", ".tagcloud > a"]
+    "forceBlockNodeSelectors.add": [".trendingNow", ".searchItem", ".tagcloud > a"],
+    "forceBlockStyleSelectors.add": [".trendingNow", ".searchItem", ".tagcloud > a"]
   },
   {
     "id": "missav",
@@ -1344,13 +1423,14 @@
     "matches": "https://spankbang.com/*",
     "excludeSelectors": [".stats", ".thumb"],
     "injectedCss": ".video-item > a { white-space:unset; }",
-    "forceBlockSelectors.add": [".searches > a", ".tag > a", ".extra > a", ".positions > li"]
+    "forceBlockNodeSelectors.add": [".searches > a", ".tag > a", ".extra > a", ".positions > li"],
+    "forceBlockStyleSelectors.add": [".searches > a", ".tag > a", ".extra > a", ".positions > li"]
   },
   {
     "id": "javdb",
     "matches": "https://javdb*.com/*",
     "excludeSelectors": [".video-number", ".score", ".has-addons"],
-    "injectedCss": ".video-title { white-space:unset; }"
+    "injectedCss": ".video-title { white-space: normal !important; overflow: visible !important; text-overflow: clip !important; }"
   },
   {
     "id": "jable",
@@ -1361,7 +1441,8 @@
     "id": "netflav",
     "matches": "https://netflav*.com/*",
     "injectedCss": ".grid_title { max-height:unset; }",
-    "forceBlockSelectors.add": [".genre_filter_item", "button"]
+    "forceBlockNodeSelectors.add": [".genre_filter_item", "button"],
+    "forceBlockStyleSelectors.add": [".genre_filter_item", "button"]
   },
   {
     "id": "czechvideo",
@@ -1420,7 +1501,7 @@
     "id": "economist",
     "matches": "www.economist.com",
     "excludeSelectors": ["footer.ds-footer", ".vjs-text-track-display"],
-    "forceInlineSelectors": ["span[data-caps='initial']"],
+    "forceInlineStyleSelectors": ["span[data-caps='initial']"],
     "injectedCss": "a::before {position:relative!important;}\n[class^=button] span font {white-space:pre-wrap;}"
   },
   {
@@ -1473,7 +1554,8 @@
       "#glow-ingress-block,#nav-link-accountList,#nav-orders,#nav-cart",
       ".a-profile-content,[data-hook=product-variation-attributes],[data-hook=helpfulVoteWidget],[data-hook=reportAbuseButton],[data-hook=helpful-vote-statement]"
     ],
-    "forceBlockSelectors.add": [".a-size-small.a-link-normal.page-banner-link.a-nowrap"],
+    "forceBlockNodeSelectors.add": [".a-size-small.a-link-normal.page-banner-link.a-nowrap"],
+    "forceBlockStyleSelectors.add": [".a-size-small.a-link-normal.page-banner-link.a-nowrap"],
     "injectedCss.add": [
       ".a-carousel-viewport {height:unset;}",
       "[class*='clamp'] {max-height: unset!important;-webkit-line-clamp: unset!important;}",
@@ -1528,8 +1610,10 @@
     "excludeMatches": ["www.sciencedirect.com/*/pdf/download/*"],
     "injectedCss": ".read-frog-translated-content-wrapper {content-visibility:auto;}",
     "excludeSelectors.add": [".bibliography", ".author-group"],
-    "forceBlockSelectors.add": ["span.display", "span.captions", "span[id^=cap]"],
+    "forceBlockNodeSelectors.add": ["span.display", "span.captions", "span[id^=cap]"],
+    "forceBlockStyleSelectors.add": ["span.display", "span.captions", "span[id^=cap]"],
     "preserveTextSelectors": ["span.display", "span.math"],
+    "atomSelectors.add": ["span.math"],
     "injectedCss.add": [
       "h2 {font-size:unset;}",
       ".u-clamp-2-lines {-webkit-line-clamp:unset!important;}"
@@ -1538,13 +1622,15 @@
   {
     "id": "thehighestofthemountains",
     "matches": "www.thehighestofthemountains.com",
-    "forceBlockSelectors.add": ["div"]
+    "forceBlockNodeSelectors.add": ["div"],
+    "forceBlockStyleSelectors.add": ["div"]
   },
   {
     "id": "annasArchive",
     "matches": ["*.annas-archive.org", "annas-archive.org"],
     "injectedCss": "div[id^='link-index-'] { height: unset; max-height: unset; }\nmain div[class*='h-[125]'] { height:auto; }",
-    "forceBlockSelectors.add": ["a.custom-a"]
+    "forceBlockNodeSelectors.add": ["a.custom-a"],
+    "forceBlockStyleSelectors.add": ["a.custom-a"]
   },
   {
     "id": "explainshell",
@@ -1610,8 +1696,7 @@
     "id": "construct",
     "matches": "www.construct.net",
     "excludeMatches": ["preview.construct.net", "editor.construct.net"],
-    "includeSelectors": ["aside", "div.manualContent"],
-    "forceInlineSelectors": ["a.forumLink"],
+    "forceInlineStyleSelectors": ["a.forumLink"],
     "injectedCss": "td.location a#LocationLink { padding-top: 4px; }\ndiv.articleMain .tutCourseWrap { align-items: flex-start; }",
     "excludeSelectors.add": [
       "div.topNav",
@@ -1660,7 +1745,8 @@
     "matches": "*.fandom.com",
     "injectedCss": "#mw-content-text > div > div:nth-child(1) { height:100%; }",
     "excludeSelectors.add": ["header.fandom-community-header", "div.ph-registration-buttons"],
-    "forceBlockSelectors.add": [".mp-nav a"]
+    "forceBlockNodeSelectors.add": [".mp-nav a"],
+    "forceBlockStyleSelectors.add": [".mp-nav a"]
   },
   {
     "id": "huggingface",
@@ -1700,7 +1786,6 @@
       "div#headlessui-portal-root",
       "nav",
       "ul[aria-multiselectable]",
-      ".markdown *",
       "div[class='flex flex-col items-start']",
       "div[class='flex items-center justify-center gap-1 border-b border-black/10 bg-gray-50 p-3 text-gray-500 dark:border-gray-900/50 dark:bg-gray-700 dark:text-gray-300']"
     ],
@@ -1735,8 +1820,7 @@
   },
   {
     "id": "android",
-    "matches": ["developer.android.google.cn", "developer.android.com"],
-    "includeSelectors": ["aside", "google-codelab-step"]
+    "matches": ["developer.android.google.cn", "developer.android.com"]
   },
   {
     "id": "ft",
@@ -1745,8 +1829,7 @@
   },
   {
     "id": "microsoft",
-    "matches": "https://apps.microsoft.com/store/detail/*",
-    "includeSelectors": ["pre"],
+    "matches": ["https://apps.microsoft.com/store/detail/*", "https://apps.microsoft.com/detail/*"],
     "injectedCss": ".line-clamp { -webkit-line-clamp:unset;max-height:unset; }"
   },
   {
@@ -1791,7 +1874,8 @@
       ".discussion_search_pagingcontrols",
       ".found_helpful,.vote_header,.date_posted,.early_access_review,.apphub_CardContentAuthorBlock"
     ],
-    "forceBlockSelectors.add": [".apphub_sectionTab"],
+    "forceBlockNodeSelectors.add": [".apphub_sectionTab"],
+    "forceBlockStyleSelectors.add": [".apphub_sectionTab"],
     "injectedCss.add": [
       ".forum_topic,.rightbox_list_option,.appHubShortcut {height: unset;}",
       ".forum_topic_name {white-space:normal;line-height: 1.25rem; padding: 6px 20px 0 0;}",
@@ -1831,8 +1915,7 @@
       ".ReviewContentCtn .title",
       ".author_counts,.control_block,.vote_info"
     ],
-    "includeSelectors": [".game_page_autocollapse_ctn iframe"],
-    "forceInlineSelectors": [".pulldown"],
+    "forceInlineStyleSelectors": [".pulldown"],
     "injectedCss": ".game_description_snippet { max-height:unset; overflow: scroll; }\n.game_purchase_area_friends_want { height: auto; padding-bottom: 6px; }\n.div.early_access_banner { height: 84px; }\n.franchise_notice > * { height: 84px; }"
   },
   {
@@ -1877,7 +1960,13 @@
       ".mat-drawer-inner-container",
       "[class*='sidenav-panel']"
     ],
-    "forceBlockSelectors.add": [
+    "forceBlockNodeSelectors.add": [
+      "app-summary-authors + div",
+      "app-full-record-keywords span span",
+      "[data-ta=summary-record-title-link]",
+      "[cdxanalyticscategory=wos-recordCard_ExpandAbstract]"
+    ],
+    "forceBlockStyleSelectors.add": [
       "app-summary-authors + div",
       "app-full-record-keywords span span",
       "[data-ta=summary-record-title-link]",
@@ -1901,13 +1990,15 @@
     "excludeSelectors": [".toolbar__ee8", "[data-test=\"left-sidebar\"]"],
     "injectedCss": ".card p,.card h4 { -webkit-line-clamp:unset; }",
     "excludeSelectors.add": [".comment__info", ".symbol.monospace"],
-    "forceBlockSelectors.add": ["[data-test=prompt]"]
+    "forceBlockNodeSelectors.add": ["[data-test=prompt]"],
+    "forceBlockStyleSelectors.add": ["[data-test=prompt]"]
   },
   {
     "id": "theverge",
     "matches": "www.theverge.com",
     "excludeSelectors.add": [".k8dtcj0", "._2xqpwjf._2xqpwj0"],
-    "forceBlockSelectors.add": ["[role='article'] p"]
+    "forceBlockNodeSelectors.add": ["[role='article'] p"],
+    "forceBlockStyleSelectors.add": ["[role='article'] p"]
   },
   {
     "id": "lookintobitcoin",
@@ -1942,19 +2033,20 @@
   {
     "id": "coinmarketcap",
     "matches": "coinmarketcap.com",
-    "forceBlockSelectors.add": ["div[class='sc-3502f6cd-0 JxHqg']"]
+    "forceBlockNodeSelectors.add": ["div[class='sc-3502f6cd-0 JxHqg']"],
+    "forceBlockStyleSelectors.add": ["div[class='sc-3502f6cd-0 JxHqg']"]
   },
   {
     "id": "wandb",
     "matches": "wandb.ai",
-    "includeSelectors": [".report-page-top"],
     "preserveTextSelectors.add": ["span[data-slate-inline=true]"]
   },
   {
     "id": "paulgraham",
     "matches": "paulgraham.com",
     "includeSelectors": ["font[face=verdana]"],
-    "forceBlockSelectors.add": ["font[face=verdana]"]
+    "forceBlockNodeSelectors.add": ["font[face=verdana]"],
+    "forceBlockStyleSelectors.add": ["font[face=verdana]"]
   },
   {
     "id": "zendesk",
@@ -1974,8 +2066,7 @@
   {
     "id": "thehackernews",
     "matches": "thehackernews.com",
-    "excludeSelectors": ["span#blog-pager-older-link", "span.h-datetime"],
-    "includeSelectors": [".pop-title"]
+    "excludeSelectors": ["span#blog-pager-older-link", "span.h-datetime"]
   },
   {
     "id": "brown",
@@ -2029,7 +2120,7 @@
   {
     "id": "ubuntu",
     "matches": "manpages.ubuntu.com",
-    "includeSelectors": ["pre"]
+    "includeSelectors": ["#manpage-content"]
   },
   {
     "id": "spiedigitallibrary",
@@ -2049,12 +2140,32 @@
   {
     "id": "ietf",
     "matches": "*.ietf.org/doc/html/*",
-    "forceBlockSelectors.add": ["[href^='#page']"]
+    "forceBlockNodeSelectors.add": ["[href^='#page']"],
+    "forceBlockStyleSelectors.add": ["[href^='#page']"]
+  },
+  {
+    "id": "ietf-rfc-plaintext",
+    "description": "An RFC published as plain text renders its whole body in <pre>: the title page in a bare <pre>, every later page in <pre class=\"newpage\">, and the datatracker document page in one <pre> under .card-body. PRE is hard-blocked by default for authored code, so the RFC body was never walked. v3 (xml2rfc) RFCs write prose as <p> and keep only code and figures in <pre>, so those stay blocked: pre.sourcecode and .artwork pre on the HTML renderings, and every <pre> inside .rfc-content-type-xml2rfc on rfc-editor.org/info pages, whose figures carry no class. span.grey is the running page header and footer of the plain-text pages",
+    "matches": [
+      "www.rfc-editor.org/rfc/*",
+      "www.rfc-editor.org/info/*",
+      "datatracker.ietf.org/doc/html/*",
+      "datatracker.ietf.org/doc/rfc*",
+      "datatracker.ietf.org/doc/draft-*"
+    ],
+    "dontWalkTags.remove": ["PRE"],
+    "excludeSelectors": [
+      "pre.sourcecode",
+      ".artwork pre",
+      ".rfc-content-type-xml2rfc pre",
+      "pre span.grey"
+    ]
   },
   {
     "id": "newsminimalist",
     "matches": "https://www.newsminimalist.com/",
-    "forceBlockSelectors.add": [".inline-flex"]
+    "forceBlockNodeSelectors.add": [".inline-flex"],
+    "forceBlockStyleSelectors.add": [".inline-flex"]
   },
   {
     "id": "yandexIndex",
@@ -2185,7 +2296,7 @@
   {
     "id": "sentry",
     "matches": "docs.sentry.io",
-    "forceInlineSelectors.add": [".term-wrapper", "span.description"]
+    "forceInlineStyleSelectors.add": [".term-wrapper", "span.description"]
   },
   {
     "id": "feedly",
@@ -2198,12 +2309,12 @@
     "matches": "web.whatsapp.com",
     "includeSelectors": ["._akbu", "[role=list]", ".copyable-text", ".quoted-mention"],
     "excludeSelectors.add": ["[aria-hidden=true]"],
-    "forceInlineSelectors.add": [".x1lliihq"]
+    "forceInlineStyleSelectors.add": [".x1lliihq"]
   },
   {
     "id": "bing",
     "matches": "https://*.bing.com/search*",
-    "forceInlineSelectors": ["a", "i"],
+    "forceInlineStyleSelectors": ["a", "i"],
     "injectedCss": "[class*='lineclamp'],.b_title { -webkit-line-clamp:unset; }\n.b_gwaDl,.b_snipwithnsl { height:unset !important; }",
     "excludeSelectors.add": [".tptxt"]
   },
@@ -2228,7 +2339,8 @@
       ".ticker-list",
       ".footer"
     ],
-    "forceBlockSelectors.add": [".SIPGg", ".sc-kzMCTH.pSZXj"],
+    "forceBlockNodeSelectors.add": [".SIPGg", ".sc-kzMCTH.pSZXj"],
+    "forceBlockStyleSelectors.add": [".SIPGg", ".sc-kzMCTH.pSZXj"],
     "injectedCss.add": [
       "[class*='line-clamp'],h3.clamp {-webkit-line-clamp:unset!important;}",
       "#atomic .Mt\\(20px\\) {margin-top: 100px;}",
@@ -2243,7 +2355,8 @@
     "matches": ["www.wsj.com", "cn.wsj.com"],
     "excludeSelectors": ["header", "footer", "nav", "[aria-label='Markets summary']"],
     "injectedCss": ".read-frog-translated-content-wrapper br {display:none;}",
-    "forceBlockSelectors.add": [".series-nav__link-thumbnail"]
+    "forceBlockNodeSelectors.add": [".series-nav__link-thumbnail"],
+    "forceBlockStyleSelectors.add": [".series-nav__link-thumbnail"]
   },
   {
     "id": "businessinsider",
@@ -2335,19 +2448,21 @@
       "[role=listitem] {overflow:scroll;}",
       "[role=listitem] div {-webkit-line-clamp:unset;}",
       "[class*='km-listitem--medium'] {height:unset !important;}",
-      ".MuiListItem-root a > div :nth-child(2) {height:unset !important;}"
+      ".MuiListItem-root a > div :nth-child(2) {height:unset !important;}",
+      ".learnGuide .read-frog-translated-content-wrapper, .learnGuide .read-frog-translated-content-wrapper span:not(:where(.read-frog-inline-atom, .read-frog-inline-atom *)) {position:static !important; inset:auto !important; width:auto !important; height:auto !important; z-index:auto !important;}"
     ]
   },
   {
     "id": "ieee",
     "matches": "spectrum.ieee.org",
-    "forceBlockSelectors.add": ["small"]
+    "forceBlockNodeSelectors.add": ["small"],
+    "forceBlockStyleSelectors.add": ["small"]
   },
   {
     "id": "cnn",
     "matches": "*.cnn.com",
     "description": "多视频页面不好处理，暂时不支持",
-    "excludeSelectors.add": [".ad-slot-header__wrapper", "#pageFooter"]
+    "excludeSelectors.add": [".ad-slot-header__wrapper"]
   },
   {
     "id": "githubBlog",
@@ -2402,7 +2517,8 @@
       ".search-result-position"
     ],
     "injectedCss": "#Scholarscope_HighlightOrigin > p font,#Scholarscope_HighlightContent > p font {display: inline!important;}\n#Scholarscope_HighlightOrigin > p font br,#Scholarscope_HighlightContent > p font br {display: none!important;}\n.title-translate {display:block;}\n.read-frog-translated-content-wrapper {content-visibility:auto;}",
-    "forceBlockSelectors.add": [".mixed-citation", ".docsum-wrap", "a.docsum-title"]
+    "forceBlockNodeSelectors.add": [".mixed-citation", ".docsum-wrap", "a.docsum-title"],
+    "forceBlockStyleSelectors.add": [".mixed-citation", ".docsum-wrap", "a.docsum-title"]
   },
   {
     "id": "chosun",
@@ -2447,7 +2563,7 @@
   {
     "id": "maxroll",
     "matches": "maxroll.gg",
-    "forceInlineSelectors": [".d4t-sprite-icon", ".d4t-icon"],
+    "forceInlineStyleSelectors": [".d4t-sprite-icon", ".d4t-icon"],
     "injectedCss": "font {font-family: sans-serif !important;}\n.d4t-sprite-icon {display: unset !important;}",
     "excludeSelectors.add": ["span[class^='text-opac'] + span[class^='text-']"]
   },
@@ -2685,7 +2801,7 @@
     "id": "barrons",
     "matches": "www.barrons.com",
     "injectedCss": "font.read-frog-translated-content-wrapper > br {display:none;}",
-    "forceInlineSelectors.add": ["article p span"]
+    "forceInlineStyleSelectors.add": ["article p span"]
   },
   {
     "id": "scrimba",
@@ -2795,7 +2911,8 @@
   {
     "id": "bank",
     "matches": "xfb.nbcb.com.cn",
-    "forceBlockSelectors.add": [".ibm, .ibt", ".cell-box", "[role=tab]"]
+    "forceBlockNodeSelectors.add": [".ibm, .ibt", ".cell-box", "[role=tab]"],
+    "forceBlockStyleSelectors.add": [".ibm, .ibt", ".cell-box", "[role=tab]"]
   },
   {
     "id": "fmoviesz",
@@ -2932,7 +3049,8 @@
     "matches": ["https://player.vimeo.com/video/*", "www.physeo.com"],
     "excludeSelectors.add": [".vp-captions-line"],
     "excludeSelectors.remove": [".notranslate", "[translate=no]"],
-    "forceBlockSelectors.add": ["span.vp-captions-line", "span[class^=CaptionsRenderer_]"]
+    "forceBlockNodeSelectors.add": ["span.vp-captions-line", "span[class^=CaptionsRenderer_]"],
+    "forceBlockStyleSelectors.add": ["span.vp-captions-line", "span[class^=CaptionsRenderer_]"]
   },
   {
     "id": "tv.adobe",
@@ -3195,7 +3313,7 @@
       "#selected-cat",
       ".GmuOkf,.d8aLif,.JYW4cc"
     ],
-    "forceInlineSelectors.add": [
+    "forceInlineStyleSelectors.add": [
       "ms-cmark-node > strong > ms-cmark-node",
       "p ms-cmark-node",
       "span > button"
@@ -3207,9 +3325,12 @@
   {
     "id": "arxiv",
     "matches": ["https://browse.arxiv.org", "https://arxiv.org/html/*"],
+    "reflowLatexmlTextBoxes": true,
+    "injectedCss.add": [
+      ".ltx_title .read-frog-translated-inline-content, .ltx_title .read-frog-translated-block-content { line-height: 1.5; }"
+    ],
     "excludeSelectors.add": [
       ".desktop_header",
-      "[class*='ltx_lst_language_']",
       "div.package-alerts",
       ".ltx_toclist",
       ".ltx_authors",
@@ -3219,13 +3340,15 @@
   {
     "id": "ar5iv",
     "matches": "ar5iv.labs.arxiv.org",
+    "reflowLatexmlTextBoxes": true,
     "excludeSelectors.add": [
       ".ltx_bibliography",
       ".ltx_tag.ltx_tag_item",
       ".ltx_listing.ltx_lstlisting.ltx_listing",
       ".ltx_eqn_table"
     ],
-    "forceBlockSelectors.add": [".ltx_p"],
+    "forceBlockNodeSelectors.add": [".ltx_p"],
+    "forceBlockStyleSelectors.add": [".ltx_p"],
     "preserveTextSelectors.add": [".ltx_note"]
   },
   {
@@ -3239,12 +3362,12 @@
     "id": "tandfonline",
     "matches": "*.tandfonline.com",
     "description": "该站点服务器对pdf资源做了保护，会严格要求host以及cookie才会响应application/pdf的请求 https://www.tandfonline.com/doi/pdf/10.1111/ajpy.12198",
-    "forceInlineSelectors.add": ["span.off-screen"]
+    "forceInlineStyleSelectors.add": ["span.off-screen"]
   },
   {
     "id": "bsky.app",
     "matches": "https://bsky.app",
-    "forceInlineSelectors": [
+    "forceInlineStyleSelectors": [
       "a[role=link][href^='/hashtag/']",
       "[data-testid*=postThread] a[role=link]",
       "[data-feed-context] button",
@@ -3258,7 +3381,6 @@
       "[data-testid^=replyBtn]",
       "[aria-label='View profile']"
     ],
-    "forceBlockSelectors.remove": ["button"],
     "injectedCss.add": [
       ".r-xoduu5 {display:inline!important;}",
       "[style*='-webkit-line-clamp'] {-webkit-line-clamp:unset!important;}"
@@ -3272,7 +3394,7 @@
   {
     "id": "jmir",
     "matches": "*.jmir.org",
-    "forceInlineSelectors": [".tooltiptext"],
+    "forceInlineStyleSelectors": [".tooltiptext"],
     "preserveTextSelectors.add": [".article-content .footers"]
   },
   {
@@ -3311,7 +3433,8 @@
   {
     "id": "notateslaapp",
     "matches": "www.notateslaapp.com",
-    "forceBlockSelectors.add": [".nav > *"]
+    "forceBlockNodeSelectors.add": [".nav > *"],
+    "forceBlockStyleSelectors.add": [".nav > *"]
   },
   {
     "id": "eightfold",
@@ -3338,7 +3461,8 @@
     "matches": "section.blog.naver.com",
     "injectedCss": ".text,.title_post,.text_post,p,strong,div { -webkit-line-clamp:unset;max-height:unset;height:unset; }",
     "excludeSelectors.add": [".comments", ".time"],
-    "forceBlockSelectors.add": [".item", ".heading a", ".info_find a"]
+    "forceBlockNodeSelectors.add": [".item", ".heading a", ".info_find a"],
+    "forceBlockStyleSelectors.add": [".item", ".heading a", ".info_find a"]
   },
   {
     "id": "hadoop.apache.org",
@@ -3382,7 +3506,8 @@
   {
     "id": "yodayo.chat",
     "matches": "https://yodayo.com/*/chat/*",
-    "forceBlockSelectors.add": [".inline-flex span"]
+    "forceBlockNodeSelectors.add": [".inline-flex span"],
+    "forceBlockStyleSelectors.add": [".inline-flex span"]
   },
   {
     "id": "ipinfo",
@@ -3398,7 +3523,7 @@
     "id": "character.ai",
     "matches": "character.ai",
     "injectedCss": ".read-frog-translated-content-wrapper br {display:none;}\n.swiper,.rah-static,[class*=max-h],.line-clamp-1 { overflow:scroll;-webkit-line-clamp:unset; }",
-    "forceInlineSelectors.add": [
+    "forceInlineStyleSelectors.add": [
       ".auto-content",
       ".auto-content *",
       "#chat-messages > .group:first-child .prose *",
@@ -3681,13 +3806,13 @@
   {
     "id": "journals.aps",
     "matches": "journals.aps.*",
-    "forceInlineSelectors": ["[class*='article'] button"],
+    "forceInlineStyleSelectors": ["[class*='article'] button"],
     "preserveTextSelectors.add": ["button"]
   },
   {
     "id": "mobalytics",
     "matches": "mobalytics.gg",
-    "forceInlineSelectors.add": ["p.xlpi6m9.x5qbwci.xw7yly9 span span"]
+    "forceInlineStyleSelectors.add": ["p.xlpi6m9.x5qbwci.xw7yly9 span span"]
   },
   {
     "id": "batchUnlimitHeight",
@@ -3725,7 +3850,8 @@
   {
     "id": "digitaltrends",
     "matches": "www.digitaltrends.com",
-    "forceBlockSelectors.add": [".b-mem-post__title"],
+    "forceBlockNodeSelectors.add": [".b-mem-post__title"],
+    "forceBlockStyleSelectors.add": [".b-mem-post__title"],
     "injectedCss.add": [
       ".b-mem__inner .b-mem-post:first-child h3{-webkit-line-clamp: 2;}",
       ".b-mem__inner .b-mem-post:first-child .b-mem-post__excerpt{display:inline;}"
@@ -3735,7 +3861,8 @@
     "id": "jscires",
     "matches": "jscires.org",
     "excludeSelectors.add": [".jatsa_contrib_info"],
-    "forceBlockSelectors.add": [".jatsauthtab_title"]
+    "forceBlockNodeSelectors.add": [".jatsauthtab_title"],
+    "forceBlockStyleSelectors.add": [".jatsauthtab_title"]
   },
   {
     "id": "vaseven",
@@ -3745,7 +3872,8 @@
   {
     "id": "qidian",
     "matches": "www.qidian.com",
-    "forceBlockSelectors.add": [".type-list a"]
+    "forceBlockNodeSelectors.add": [".type-list a"],
+    "forceBlockStyleSelectors.add": [".type-list a"]
   },
   {
     "id": "alphaxiv",
@@ -3867,7 +3995,7 @@
   {
     "id": "trade",
     "matches": "axiom.trade",
-    "forceInlineSelectors.add": ["[class^=tweet-body_root]"]
+    "forceInlineStyleSelectors.add": ["[class^=tweet-body_root]"]
   },
   {
     "id": "pytorch",
@@ -3919,7 +4047,8 @@
   {
     "id": "dtmstation",
     "matches": "www.dtmstation.com",
-    "forceBlockSelectors.add": [".entry-card-title,.entry-card-snippet"],
+    "forceBlockNodeSelectors.add": [".entry-card-title,.entry-card-snippet"],
+    "forceBlockStyleSelectors.add": [".entry-card-title,.entry-card-snippet"],
     "injectedCss.add": [
       ".entry-card-title,.entry-card-snippet { -webkit-line-clamp: unset!important; max-height: unset!important;}"
     ]
@@ -3927,7 +4056,8 @@
   {
     "id": "docs-tutorials",
     "matches": "docs.pytorch.org",
-    "forceBlockSelectors.add": [".tutorial-filter"]
+    "forceBlockNodeSelectors.add": [".tutorial-filter"],
+    "forceBlockStyleSelectors.add": [".tutorial-filter"]
   },
   {
     "id": "ru-sites",
@@ -4075,12 +4205,12 @@
     "id": "sdk-cooperate",
     "matches": "pandaily.com",
     "excludeSelectors.add": ["[data-discover]", "header"],
-    "forceInlineSelectors.add": ["h3"]
+    "forceInlineStyleSelectors.add": ["h3"]
   },
   {
     "id": "read.amazon",
     "matches": "read.amazon.com",
-    "forceInlineSelectors.add": ["span.kg-a11y-rel[role=text]"],
+    "forceInlineStyleSelectors.add": ["span.kg-a11y-rel[role=text]"],
     "injectedCss.add": [
       "font { color:#333!important; white-space: pre-wrap;}",
       "p > font { position:absolute;left:0;right:0; }",
@@ -4289,7 +4419,8 @@
     "description": "给部分网页开后门翻译 header标签",
     "excludeSelectors.add": [".site-header"],
     "excludeSelectors.remove": [".notranslate", "[translate=no]"],
-    "forceBlockSelectors.add": [".btn"],
+    "forceBlockNodeSelectors.add": [".btn"],
+    "forceBlockStyleSelectors.add": [".btn"],
     "injectedCss.add": [
       "[class*='line-clamp-'] {-webkit-line-clamp: unset!important; max-height: unset!important;}"
     ]
@@ -4316,7 +4447,8 @@
       "shreddit-comment-action-row > *",
       "shreddit-post-flair"
     ],
-    "forceBlockSelectors": ["shreddit-post-text-body"]
+    "forceBlockNodeSelectors": ["shreddit-post-text-body"],
+    "forceBlockStyleSelectors": ["shreddit-post-text-body"]
   },
   {
     "id": "readfrog-youtube",
@@ -4343,7 +4475,8 @@
       ".read-frog-subtitles-state-message",
       ".read-frog-subtitles-translate-button"
     ],
-    "forceBlockSelectors": ["yt-attributed-string > span"]
+    "forceBlockNodeSelectors": ["yt-attributed-string > span"],
+    "forceBlockStyleSelectors": ["yt-attributed-string > span"]
   },
   {
     "id": "readfrog-discord",
@@ -4352,6 +4485,7 @@
     "excludeSelectors": [
       "[id^=\"message-username\"]",
       "span[class*=\"-timestamp\"]",
+      "div[id^=\"message-content\"] > span[class*=\"timestamp_\"]",
       "div[class*=\"-repliedMessage\"]",
       "li[class*=\"-containerDefault\"]",
       "[class*=\"-subtitleContainer\"]",
@@ -4369,7 +4503,8 @@
       "[class*=\"OverviewContent-module__Box_1--\"] *",
       "table.diff-table"
     ],
-    "forceBlockSelectors": ["task-lists"]
+    "forceBlockNodeSelectors": ["task-lists"],
+    "forceBlockStyleSelectors": ["task-lists"]
   },
   {
     "id": "ieeexplore",
@@ -4447,6 +4582,12 @@
     "preserveTextSelectors.add": ["em"]
   },
   {
+    "id": "ui-community-releases",
+    "description": "Keep Ubiquiti Community's visible virtual-list items walkable while translating release posts and comments",
+    "matches": "https://community.ui.com/releases/*",
+    "injectedCss": "div[style*='flex: 0 0 auto'][style*='position: relative'][style*='visibility: hidden']:has(> div[style*='position: absolute'][style*='visibility: visible']) { visibility: visible !important; }"
+  },
+  {
     "id": "hltv",
     "matches": ["hltv.org", "*.hltv.org"],
     "excludeSelectors": [
@@ -4458,5 +4599,35 @@
       ".forum-topbar",
       ".forum-bottombar"
     ]
+  },
+  {
+    "id": "sillytavern",
+    "description": "SillyTavern renders backtick narration as <p><code>; translate CODE as part of its paragraph (fenced code blocks stay protected by PRE)",
+    "matches": ["localhost", "127.0.0.1"],
+    "dontWalkButTranslateTags.remove": ["CODE"]
+  },
+  {
+    "id": "alibaba-sourcing-rfq",
+    "description": "Alibaba's RFQ portal renders the buyer's hand-written request body in <pre class=\"value\"> (the Details / 详细描述 field). PRE is hard-blocked by default for authored code, so the entire request body was dropped from the walk while every field around it translated. This host serves sourcing pages only, no code",
+    "matches": "sourcing.alibaba.com",
+    "dontWalkTags.remove": ["PRE"]
+  },
+  {
+    "id": "gamefaqs-guides",
+    "description": "GameFAQs serves a text guide as an HTML page whose entire body is a run of <pre id=\"faqspan-N\"> blocks (about 50k characters each) under #faqtext. PRE is hard-blocked by default for authored code, and readfrog-plain-text-document only covers plain-text and markdown documents, so the guide was never walked while the page around it translated. Limited to guide pages, where a <pre> holds the author's prose; its blank lines then split it into one translation per paragraph",
+    "matches": "gamefaqs.gamespot.com/*/faqs/*",
+    "dontWalkTags.remove": ["PRE"]
+  },
+  {
+    "id": "readfrog-x-chat",
+    "description": "Skip the X Chat message footer (send time + delivery receipt). It renders twice inside the bubble — once as an aria-hidden opacity-0 spacer in the text flow, once in the absolutely positioned overlay — so both copies otherwise land in the message's translation unit. Target the footer root only: excluding its `.absolute.bottom-0.inset-e-0` wrapper too would hide that wrapper from unwrapDeepestOnlyHTMLChild, turning the bubble row into an only-child chain and moving the translation wrapper down into the pre-wrap text block",
+    "matches": ["chat.x.com"],
+    "excludeSelectors": ["div.flex.items-center.ml-auto.shrink-0.gap-1"]
+  },
+  {
+    "id": "thenorthfacekorea",
+    "description": "The header dropdowns open on pure CSS hover (`.onedepth.twoDepth_hover:hover .twoDepth_wrap`), which changes no DOM, so the walk never came back to them after skipping them as display: none. The all-categories menu needs no entry: opening it sets a style on <body>, which already re-walks it",
+    "matches": "*.thenorthfacekorea.co.kr",
+    "walkHiddenSelectors": [".header-gnb .twoDepth_wrap"]
   }
 ]

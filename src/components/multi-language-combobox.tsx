@@ -1,8 +1,8 @@
-import type { LangCodeISO6393 } from "@read-frog/definitions"
+import type { LanguageTag } from "@read-frog/definitions"
 import type { LanguageItem } from "./language-combobox-options"
 import { Combobox as ComboboxPrimitive } from "@base-ui/react"
 import { Icon } from "@iconify/react"
-import { langCodeISO6393Schema } from "@read-frog/definitions"
+import { languageTagSchema } from "@read-frog/definitions"
 import { useMemo } from "react"
 import { Button } from "@/components/ui/base-ui/button"
 import {
@@ -17,16 +17,16 @@ import { i18n } from "@/utils/i18n"
 import { getLanguageLabel } from "@/utils/language-labels"
 import { filterLanguage } from "./language-combobox-options"
 
-function getLanguageItems(): LanguageItem<LangCodeISO6393>[] {
-  return langCodeISO6393Schema.options.map((code) => ({
+function getLanguageItems(): LanguageItem<LanguageTag>[] {
+  return languageTagSchema.options.map((code) => ({
     value: code,
     label: getLanguageLabel(code),
   }))
 }
 
 interface MultiLanguageComboboxProps {
-  selectedLanguages: LangCodeISO6393[]
-  onLanguagesChange: (languages: LangCodeISO6393[]) => void
+  selectedLanguages: LanguageTag[]
+  onLanguagesChange: (languages: LanguageTag[]) => void
   buttonLabel: string
 }
 
@@ -46,22 +46,20 @@ export function MultiLanguageCombobox({
     <Combobox
       multiple
       value={selectedItems}
-      onValueChange={(items: LanguageItem<LangCodeISO6393>[]) => {
+      onValueChange={(items: LanguageItem<LanguageTag>[]) => {
         onLanguagesChange(items.map((item) => item.value))
       }}
       items={languageItems}
       filter={filterLanguage}
     >
-      <ComboboxPrimitive.Trigger
-        render={<Button variant="outline" className="w-40 justify-between" />}
-      >
+      <ComboboxPrimitive.Trigger render={<Button variant="outline" size="sm" />}>
         <span className="truncate">{buttonLabel}</span>
-        <Icon icon="tabler:chevron-down" className="text-muted-foreground" />
+        <Icon icon="tabler:chevron-down" className="size-4 text-muted-foreground" />
       </ComboboxPrimitive.Trigger>
       <ComboboxContent align="end" className="w-fit">
         <ComboboxInput showTrigger={false} placeholder={i18n.t("translationHub.searchLanguages")} />
         <ComboboxList>
-          {(item: LanguageItem<LangCodeISO6393>) => (
+          {(item: LanguageItem<LanguageTag>) => (
             <ComboboxItem key={item.value} value={item}>
               {item.label}
             </ComboboxItem>

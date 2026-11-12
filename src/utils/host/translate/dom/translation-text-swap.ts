@@ -170,7 +170,7 @@ function alignGap(sourceGap: Text[], targetGap: Text[], acc: AlignmentAccumulato
   }
   if (!joinedTarget) return // uncovered source text
 
-  const pair: TextSwapPair = { node: relevantSource[0], translatedValue: joinedTarget }
+  const pair: TextSwapPair = { node: relevantSource[0]!, translatedValue: joinedTarget }
   acc.pairs.push(pair)
   // Provider merged several source fragments: the first node carries the whole
   // translation, the rest are blanked (same parent, so visually identical).
@@ -193,9 +193,9 @@ function alignLevel(
   const targetElements = target.sequence.filter((item): item is Element => !Array.isArray(item))
   if (sourceElements.length !== targetElements.length) return false
   for (let i = 0; i < sourceElements.length; i++) {
-    if (sourceElements[i].localName !== targetElements[i].localName) return false
+    if (sourceElements[i]!.localName !== targetElements[i]!.localName) return false
     for (const name of IDENTITY_ATTRIBUTES) {
-      if (sourceElements[i].getAttribute(name) !== targetElements[i].getAttribute(name)) {
+      if (sourceElements[i]!.getAttribute(name) !== targetElements[i]!.getAttribute(name)) {
         return false
       }
     }
@@ -212,8 +212,8 @@ function alignLevel(
       continue
     }
     const targetElement = targetItem as Element
-    collectTranslatedAttributePairs(sourceItem, targetElement, acc)
-    if (!alignLevel([...sourceItem.childNodes], [...targetElement.childNodes], acc)) {
+    collectTranslatedAttributePairs(sourceItem!, targetElement, acc)
+    if (!alignLevel([...sourceItem!.childNodes], [...targetElement.childNodes], acc)) {
       return false
     }
   }
@@ -267,7 +267,7 @@ export function planInPlaceTextSwap(
     const translatedText = template.content.textContent ?? ""
     if (!translatedText.trim()) return null
     return {
-      pairs: [{ node: sourceTextNodes[0], translatedValue: translatedText }],
+      pairs: [{ node: sourceTextNodes[0]!, translatedValue: translatedText }],
       attributePairs: [],
       coverage: 1,
     }
@@ -330,18 +330,32 @@ export function applyInPlaceTextSwap(
   }
   refreshTranslationOnlySwapRecordExpectedText(record)
 
+  const state = ensureTranslationOnlyAnchorState(anchor, config, getAnchorState)
+  // A retranslation pass replaces its run's previous record — appending would
+  // leave a dead record whose stale references keep flagging the anchor as
+  // host-changed.
+  dropTranslationOnlySwapRecords(
+    state,
+    state.swaps.filter((existing) => swapRecordIntersectsNodes(existing, runNodes)),
+  )
+  state.swaps.push(record)
+}
+
+/**
+ * The anchor state for `anchor`, marking and registering it on first use.
+ *
+ * Separate from `applyInPlaceTextSwap` so the virtual-paragraph path can claim
+ * the anchor up front, when it cuts the container's Text nodes — the marker
+ * has to exist from that moment for a page-wide cleanup to find the anchor,
+ * even if every unit then fails before it ever swaps anything.
+ */
+export function ensureTranslationOnlyAnchorState(
+  anchor: HTMLElement,
+  config: Config,
+  getAnchorState: (anchor: HTMLElement) => TranslationOnlyAnchorState | undefined,
+): TranslationOnlyAnchorState {
   const existingState = getAnchorState(anchor)
-  if (existingState) {
-    // A retranslation pass replaces its run's previous record — appending
-    // would leave a dead record whose stale references keep flagging the
-    // anchor as host-changed.
-    dropTranslationOnlySwapRecords(
-      existingState,
-      existingState.swaps.filter((existing) => swapRecordIntersectsNodes(existing, runNodes)),
-    )
-    existingState.swaps.push(record)
-    return
-  }
+  if (existingState) return existingState
 
   const attributeAdjustments = [
     {
@@ -353,9 +367,7 @@ export function applyInPlaceTextSwap(
   ]
   anchor.setAttribute(TRANSLATION_ONLY_ATTRIBUTE, "")
   setTranslationDirAndLang(anchor, config)
-  registerTranslationOnlyAnchorState({
-    anchor,
-    attributeAdjustments,
-    swaps: [record],
-  })
+  const state: TranslationOnlyAnchorState = { anchor, attributeAdjustments, swaps: [] }
+  registerTranslationOnlyAnchorState(state)
+  return state
 }

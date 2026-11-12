@@ -5,6 +5,7 @@ interface PriorityQueue<T> {
   size: () => number
   isEmpty: () => boolean
   clear: () => void
+  removeWhere: (predicate: (value: T) => boolean) => void
 }
 
 export class BinaryHeapPQ<T> implements PriorityQueue<T> {
@@ -24,7 +25,7 @@ export class BinaryHeapPQ<T> implements PriorityQueue<T> {
   pop() {
     if (this.isEmpty()) return undefined
 
-    const result = this.heap[0].value
+    const result = this.heap[0]!.value
     const last = this.heap.pop()
 
     if (this.heap.length > 0 && last) {
@@ -47,12 +48,27 @@ export class BinaryHeapPQ<T> implements PriorityQueue<T> {
     this.heap = []
   }
 
+  /**
+   * Remove every entry matching the predicate. Removal (rather than
+   * mark-and-skip-on-pop) matters: schedule() derives its next timer delay
+   * from peek(), so a cancelled head with a far-future priority would stall
+   * dispatch of the live tasks behind it.
+   */
+  removeWhere(predicate: (value: T) => boolean) {
+    const kept = this.heap.filter((entry) => !predicate(entry.value))
+    if (kept.length === this.heap.length) return
+    this.heap = kept
+    for (let i = Math.floor(this.heap.length / 2) - 1; i >= 0; i--) {
+      this.heapifyDown(i)
+    }
+  }
+
   private heapifyUp(index: number) {
     while (index > 0) {
       const parentIndex = Math.floor((index - 1) / 2)
-      if (this.compare(this.heap[parentIndex].key, this.heap[index].key) <= 0) break
+      if (this.compare(this.heap[parentIndex]!.key, this.heap[index]!.key) <= 0) break
 
-      ;[this.heap[parentIndex], this.heap[index]] = [this.heap[index], this.heap[parentIndex]]
+      ;[this.heap[parentIndex], this.heap[index]] = [this.heap[index]!, this.heap[parentIndex]!]
       index = parentIndex
     }
   }
@@ -66,14 +82,14 @@ export class BinaryHeapPQ<T> implements PriorityQueue<T> {
 
       if (
         leftChild < this.heap.length &&
-        this.compare(this.heap[nextIndex].key, this.heap[leftChild].key) > 0
+        this.compare(this.heap[nextIndex]!.key, this.heap[leftChild]!.key) > 0
       ) {
         nextIndex = leftChild
       }
 
       if (
         rightChild < this.heap.length &&
-        this.compare(this.heap[nextIndex].key, this.heap[rightChild].key) > 0
+        this.compare(this.heap[nextIndex]!.key, this.heap[rightChild]!.key) > 0
       ) {
         nextIndex = rightChild
       }
@@ -81,8 +97,8 @@ export class BinaryHeapPQ<T> implements PriorityQueue<T> {
       if (nextIndex === currentIndex) break
 
       ;[this.heap[currentIndex], this.heap[nextIndex]] = [
-        this.heap[nextIndex],
-        this.heap[currentIndex],
+        this.heap[nextIndex]!,
+        this.heap[currentIndex]!,
       ]
       currentIndex = nextIndex
     }

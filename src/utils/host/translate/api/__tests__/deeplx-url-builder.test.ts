@@ -73,7 +73,7 @@ describe("deeplxTranslate default URL fallback", () => {
   })
 
   it("uses the default DeepLX placeholder URL when baseURL is missing", async () => {
-    const result = await deeplxTranslate("Hi", "auto", "zh", {
+    const result = await deeplxTranslate("Hi", "auto", "zh-Hans", {
       id: "deeplx-default",
       enabled: true,
       name: "DeepLX",
@@ -89,7 +89,7 @@ describe("deeplxTranslate default URL fallback", () => {
       }),
     )
 
-    const [, requestInit] = fetchMock.mock.calls[0]
+    const [, requestInit] = fetchMock.mock.calls[0]!
     expect(JSON.parse(requestInit.body)).toEqual({
       text: "Hi",
       source_lang: "auto",
@@ -103,7 +103,7 @@ describe("deeplxTranslate default URL fallback", () => {
       await deeplxTranslate(
         "Hi",
         "en",
-        "zh",
+        "zh-Hans",
         {
           id: "deeplx-default",
           enabled: true,
@@ -114,7 +114,7 @@ describe("deeplxTranslate default URL fallback", () => {
         { textFormat },
       )
 
-      const [, requestInit] = fetchMock.mock.calls[0]
+      const [, requestInit] = fetchMock.mock.calls[0]!
       expect(JSON.parse(requestInit.body)).toEqual({
         text: "Hi",
         source_lang: "EN",
@@ -127,7 +127,7 @@ describe("deeplxTranslate default URL fallback", () => {
     await deeplxTranslate(
       '<p class="message">Hi</p>',
       "en",
-      "zh",
+      "zh-Hans",
       {
         id: "deeplx-default",
         enabled: true,
@@ -138,7 +138,7 @@ describe("deeplxTranslate default URL fallback", () => {
       { textFormat: "html" },
     )
 
-    const [, requestInit] = fetchMock.mock.calls[0]
+    const [, requestInit] = fetchMock.mock.calls[0]!
     expect(JSON.parse(requestInit.body)).toEqual({
       text: '<p class="message">Hi</p>',
       source_lang: "EN",
@@ -149,7 +149,7 @@ describe("deeplxTranslate default URL fallback", () => {
 
   it("throws the placeholder API key error when fallback URL needs a missing key", async () => {
     await expect(
-      deeplxTranslate("Hi", "auto", "zh", {
+      deeplxTranslate("Hi", "auto", "zh-Hans", {
         id: "deeplx-default",
         enabled: true,
         name: "DeepLX",

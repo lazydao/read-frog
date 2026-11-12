@@ -40,6 +40,13 @@ export interface BilingualTranslationState {
   status: "active" | "disposed"
   walkId: string
   wrapper: HTMLElement | null
+  // Expected wrapper.textContent right after the translated node is appended.
+  // null during construction and for error-UI wrappers — in-wrapper mutation
+  // records then stay classified self-inflicted (#1831). Set only on the
+  // successful-insertion path; a later divergence means the SITE rewrote our
+  // wrapper content (truncation scripts, normalizers) and the translation must
+  // be repaired instead of silently staying corrupted (#1918).
+  wrapperTextContent: string | null
 }
 
 // State management for translation operations
@@ -104,6 +111,22 @@ export interface TranslationOnlyAnchorState {
   // guardedly when the last swap is undone.
   attributeAdjustments: { name: string; previousValue: string | null }[]
   swaps: TranslationOnlySwapRecord[]
+  // Set only on a virtual-paragraph anchor: the Text cuts that turned the
+  // container's blank-line paragraphs into per-unit runs. Rejoined when the
+  // generation ends, AFTER its swaps are restored — restoreTextSplit compares
+  // the rejoined value against the original, so translated text still in place
+  // would make it refuse.
+  splitRecords?: TextSplitRecord[]
+  // Present from the moment a virtual-paragraph generation starts until a full
+  // restore ends it, and bumped for each new one. Three jobs: the anchor must
+  // not finalize mid-generation (units anchor their own records on descendants,
+  // so `swaps` is legitimately empty in between); a unit's late provider
+  // response can tell whether its generation is still the current one; and,
+  // once the units have settled, this is the only durable sign that the
+  // container is segmented at all — a generation whose units are whole
+  // elements registers every record on a descendant and may cut nothing, so
+  // neither `swaps` nor `splitRecords` can answer that question.
+  virtualGeneration?: number
 }
 
 const translationOnlyAnchorStates = new WeakMap<HTMLElement, TranslationOnlyAnchorState>()
@@ -348,6 +371,66 @@ export function unregisterBilingualTranslationState(state: BilingualTranslationS
   state.status = "disposed"
 }
 
+/**
+ * Re-key a live state onto an identical copy of its layout source, after its
+ * wrapper has been moved into that copy (see carryTranslationsAcrossRewrite).
+ * The wrapper index needs no update: the wrapper object itself moved.
+ */
+export function rebindBilingualTranslationState(
+  state: BilingualTranslationState,
+  layoutSource: HTMLElement,
+): void {
+  if (bilingualTranslationsBySource.get(state.layoutSource) === state) {
+    bilingualTranslationsBySource.delete(state.layoutSource)
+  }
+  state.layoutSource = layoutSource
+  bilingualTranslationsBySource.set(layoutSource, state)
+}
+
+// Capitulation counter for wrapper-content fights (#1918): a site script that
+// deterministically rewrites our wrapper content (NBSP normalizers, truncation
+// scripts) would otherwise loop the budgeted retranslation forever — the
+// budget bounds the RATE, never the duration. Keyed by layoutSource so the
+// count survives state replacement across repairs; NOT reset on repair
+// success, only on genuine host-content changes (a reset on repair would
+// re-arm the infinite fight).
+const wrapperTamperRepairCounts = new WeakMap<HTMLElement, number>()
+
+/** Repair attempts before adopting the site's wrapper content as expected. */
+export const MAX_WRAPPER_TAMPER_REPAIRS = 3
+
+export function countWrapperTamperRepair(layoutSource: HTMLElement): number {
+  const next = (wrapperTamperRepairCounts.get(layoutSource) ?? 0) + 1
+  wrapperTamperRepairCounts.set(layoutSource, next)
+  return next
+}
+
+export function resetWrapperTamperRepairs(layoutSource: HTMLElement): void {
+  wrapperTamperRepairCounts.delete(layoutSource)
+}
+
+/**
+ * True when the ONLY defect is that the wrapper's content diverged from the
+ * post-insertion snapshot: registration, connectivity, containment and host
+ * text are all intact. This is the signature of a site-side rewrite of our
+ * wrapper content (#1918) — distinguishable from genuine host-content
+ * changes, which must always retranslate (and reset the capitulation count).
+ */
+export function isBilingualWrapperContentTampered(state: BilingualTranslationState): boolean {
+  return (
+    state.status === "active" &&
+    bilingualTranslationsBySource.get(state.layoutSource) === state &&
+    state.layoutSource.isConnected &&
+    state.wrapper !== null &&
+    bilingualTranslationsByWrapper.get(state.wrapper) === state &&
+    state.wrapper.isConnected &&
+    state.layoutSource.contains(state.wrapper) &&
+    state.wrapperTextContent !== null &&
+    state.wrapper.textContent !== state.wrapperTextContent &&
+    collectHostText(state.layoutSource, new Set([state.wrapper])) === state.sourceTextContent
+  )
+}
+
 export function isBilingualTranslationStateCurrent(state: BilingualTranslationState): boolean {
   if (
     state.status !== "active" ||
@@ -368,8 +451,60 @@ export function isBilingualTranslationStateCurrent(state: BilingualTranslationSt
     bilingualTranslationsByWrapper.get(state.wrapper) === state &&
     state.wrapper.isConnected &&
     state.layoutSource.contains(state.wrapper) &&
-    collectHostText(state.layoutSource, new Set([state.wrapper])) === state.sourceTextContent
+    collectHostText(state.layoutSource, new Set([state.wrapper])) === state.sourceTextContent &&
+    // Wrapper-content integrity: a site rewriting text INSIDE our wrapper
+    // (truncation scripts, normalizers) must read as stale so the budgeted
+    // retranslation pipeline repairs it (#1918). Exact compare, consistent
+    // with collectHostText/expectedRunText. Last conjunct: cheapest exit
+    // paths first.
+    (state.wrapperTextContent === null || state.wrapper.textContent === state.wrapperTextContent)
   )
+}
+
+/**
+ * Nearest ancestor (or the node itself) registered as a bilingual layout source
+ * or virtual paragraph group — regardless of whether that registration is still
+ * current.
+ *
+ * A node ADDED inside a registered source is that source's business, never a
+ * translation unit of its own: `observeTopLevelParagraphs` computes "top-level
+ * paragraph" RELATIVE TO ITS WALK ROOT, so walking the addition promotes an
+ * inline span to a unit and gives it a second wrapper inside the enclosing one
+ * (#2185).
+ *
+ * Scope: this covers the childList route only. The attribute/reveal route
+ * (`collectNewlyWalkableSubtrees` -> `observeTopLevelParagraphs(unblocked)`)
+ * still creates a walk root inside a registered source, deliberately — the
+ * duality below does NOT hold there, because `collectRawSource` drops
+ * non-translatable children entirely, so revealing one changes what is
+ * translatable WITHOUT changing `collectHostText`. The enclosing source stays
+ * current, nothing would retranslate it, and skipping that walk would strand
+ * revealed accordion / "show more" content permanently.
+ *
+ * The currency-independence is what makes refusing that walk safe. A registered
+ * source is in exactly one of two states, and both are already handled:
+ *  • current — `collectHostText` still equals its snapshot, so the addition
+ *    brought no new host text (a hover decorator only re-parents existing Text);
+ *  • stale — `findStaleBilingualLayoutSource` below resolves the SAME element
+ *    from the SAME record in the same pass, so `retranslateChangedSource` is
+ *    already scheduled for it under the #1831 budget.
+ * There is no third case, so callers strand nothing by skipping the walk.
+ *
+ * `parentElement` only — this must NEVER cross a shadow host. `collectHostText`
+ * is shadow-blind, so a source found across a host could not vouch for text
+ * inside the shadow tree and that text would be skipped forever.
+ * (`PageTranslationManager.isSourceWalkBlocked` crosses hosts on purpose; do
+ * not copy its shape here.)
+ */
+export function findEnclosingBilingualLayoutSource(node: Node): HTMLElement | undefined {
+  let current = node.nodeType === Node.ELEMENT_NODE ? (node as HTMLElement) : node.parentElement
+  while (current) {
+    if (virtualParagraphGroupsBySource.has(current) || bilingualTranslationsBySource.has(current)) {
+      return current
+    }
+    current = current.parentElement
+  }
+  return undefined
 }
 
 export function findStaleBilingualLayoutSource(node: Node): HTMLElement | undefined {
@@ -430,12 +565,16 @@ export function isVirtualParagraphGroupCurrent(
   )
   for (const { source, parent, originalValue, createdTails } of group.splitRecords) {
     const fragments = [source, ...createdTails]
-    let previousIndex = -1
+    // One forward sibling walk proves the fragments are in order. Indexing each
+    // fragment in a fresh copy of `parent.childNodes` cost O(tails × children)
+    // per check, and every unit and mutation record re-checks: a 50k-character
+    // GameFAQs <pre> split into ~225 units froze the page for ~13 s.
+    let cursor: ChildNode | null = null
     for (const fragment of fragments) {
       if (!fragment.isConnected || fragment.parentNode !== parent) return false
-      const index = [...parent.childNodes].indexOf(fragment)
-      if (index <= previousIndex) return false
-      previousIndex = index
+      cursor = cursor === null ? fragment : cursor.nextSibling
+      while (cursor !== null && cursor !== fragment) cursor = cursor.nextSibling
+      if (cursor === null) return false
     }
     if (fragments.map((fragment) => fragment.data).join("") !== originalValue) return false
   }
@@ -456,8 +595,8 @@ export function isVirtualParagraphGroupCurrent(
   }
 
   for (let index = 1; index < group.sourceSnapshots.length; index += 1) {
-    const previous = group.sourceSnapshots[index - 1].source
-    const current = group.sourceSnapshots[index].source
+    const previous = group.sourceSnapshots[index - 1]!.source
+    const current = group.sourceSnapshots[index]!.source
     if (!(previous.compareDocumentPosition(current) & 4)) return false
   }
 

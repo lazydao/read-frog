@@ -1,5 +1,6 @@
 import type { Config } from "@/types/config/config"
 // @vitest-environment jsdom
+import type { SiteRule } from "@/types/config/site-rules"
 import type { TranslationMode } from "@/types/config/translate"
 import { act, render, screen, waitFor } from "@testing-library/react"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
@@ -9,6 +10,7 @@ import {
   BLOCK_CONTENT_CLASS,
   CONTENT_WRAPPER_CLASS,
   FLOAT_WRAP_ATTRIBUTE,
+  INLINE_ATOM_CLASS,
   INLINE_ATTRIBUTE,
   INLINE_CONTENT_CLASS,
   PARAGRAPH_ATTRIBUTE,
@@ -39,33 +41,54 @@ vi.mock("@/utils/host/translate/translate-variants", () => ({
   translateTextForPage: vi.fn<(...args: any[]) => any>(() => Promise.resolve(MOCK_TRANSLATION)),
 }))
 
+const DEFAULT_PAGE_TRANSLATION_OPTIONS = {
+  preserveLineBreaks: false,
+  forceRetranslation: false,
+}
+const PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS = {
+  preserveLineBreaks: true,
+  forceRetranslation: false,
+}
+
 const BILINGUAL_CONFIG: Config = {
   ...DEFAULT_CONFIG,
-  translate: {
-    ...DEFAULT_CONFIG.translate,
+  pageTranslation: {
+    ...DEFAULT_CONFIG.pageTranslation,
     mode: "bilingual" as const,
   },
 }
 
 const TRANSLATION_ONLY_CONFIG: Config = {
   ...DEFAULT_CONFIG,
-  translate: {
-    ...DEFAULT_CONFIG.translate,
+  pageTranslation: {
+    ...DEFAULT_CONFIG.pageTranslation,
     mode: "translationOnly" as const,
   },
 }
 
-function setHost(host: string) {
+function bilingualConfigWithSiteRule(rule: Omit<SiteRule, "id" | "matches">): Config {
+  const config = structuredClone(BILINGUAL_CONFIG)
+  config.siteRules.userRules = [
+    {
+      id: "translation-style-test",
+      matches: "example.com",
+      ...rule,
+    },
+  ]
+  return config
+}
+
+function setHost(host: string, pathname = "/some/path") {
   Object.defineProperty(window, "location", {
-    value: new URL(`https://${host}/some/path`),
+    value: new URL(`https://${host}${pathname}`),
     writable: true,
     configurable: true,
   })
 }
 
-async function withHost(host: string, callback: () => Promise<void>) {
+async function withHost(host: string, callback: () => Promise<void>, pathname = "/some/path") {
   const originalLocation = window.location
-  setHost(host)
+  setHost(host, pathname)
   try {
     await callback()
   } finally {
@@ -164,6 +187,64 @@ describe("translate", () => {
     })
   }
 
+  describe("LaTeXML SVG text boxes", () => {
+    // Shapes reported on arxiv.org/html/2609.32423 and /2601.21557v2.
+    // The latter puts its title, authors and abstract inside the same SVG.
+    const fixtures = [
+      {
+        paper: "2609.32423",
+        content:
+          '<span class="ltx_para"><span class="ltx_p" style="display:block">Abstract</span><span class="ltx_p" style="display:block"><span>The harness surrounding a language model is a central determinant of agent performance.</span></span></span>',
+      },
+      {
+        paper: "2601.21557v2",
+        content:
+          '<span class="ltx_para"><span class="ltx_p" style="display:block">Meta Context Engineering via Agentic Skill Evolution</span><span class="ltx_p" style="display:block">Haoran Ye<sup>1</sup></span></span><span class="ltx_para"><span class="ltx_p" style="display:block"><b>Abstract:</b><span>The operational efficacy of large language models relies heavily on their inference-time context.</span></span></span>',
+      },
+    ]
+
+    it.each(
+      fixtures.flatMap((fixture) =>
+        (["bilingual", "translationOnly"] as const).map((mode) => ({ ...fixture, mode })),
+      ),
+    )("translates $paper in $mode mode and restores the SVG nodes", async ({ content, mode }) => {
+      await withHost(
+        "arxiv.org",
+        async () => {
+          const host = document.createElement("div")
+          host.innerHTML = `<span class="ltx_inline-block"><svg class="ltx_picture" width="550" height="357" viewBox="0 0 550 357"><g fill="#F3F8FA"><path d="M0 0H550V357H0Z"></path></g><g><foreignObject width="500" height="320" style="font-size:10pt"><span class="ltx_foreignobject_container"><span class="ltx_foreignobject_content"><span class="ltx_minipage">${content}<span class="ltx_p" style="display:block"><a href="https://example.com/code">Code repository</a></span></span></span></span></foreignObject></g></svg></span>`
+          document.body.append(host)
+          const svg = host.querySelector("svg")!
+          const source = host.querySelector(".ltx_foreignobject_content")!
+          const link = host.querySelector("a")!
+          const original = svg.textContent
+          const onClick = vi.fn<(event: MouseEvent) => void>((event) => event.preventDefault())
+          link.addEventListener("click", onClick)
+
+          await removeOrShowPageTranslation(mode)
+
+          expect(host.querySelector("svg")).toBeNull()
+          expect(host.querySelector("[data-read-frog-latexml-text-box]")?.contains(source)).toBe(
+            true,
+          )
+          expect(translateTextForPage).toHaveBeenCalled()
+          expect(host.textContent).toContain(MOCK_TRANSLATION)
+          expect(host.textContent?.includes("Abstract")).toBe(mode === "bilingual")
+
+          removeAllTranslatedWrapperNodes()
+          expect(host.querySelector("svg")).toBe(svg)
+          expect(svg.querySelector(".ltx_foreignobject_content")).toBe(source)
+          expect(svg.textContent).toBe(original)
+          expect(svg.querySelector("a")).toBe(link)
+          link.dispatchEvent(new MouseEvent("click", { cancelable: true }))
+          expect(onClick).toHaveBeenCalledOnce()
+          host.remove()
+        },
+        "/html/test-paper",
+      )
+    })
+  })
+
   describe("translateTextForPage stub", () => {
     it("translateTextForPage should be mocked", async () => {
       expect(await translateTextForPage("任何文字")).toBe(MOCK_TRANSLATION)
@@ -211,9 +292,9 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
         const wrapper = expectTranslationWrapper(node, "bilingual")
-        expect(wrapper).toBe(node.childNodes[0].childNodes[1])
+        expect(wrapper).toBe(node.childNodes[0]!.childNodes[1])
         expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
 
         await removeOrShowPageTranslation("bilingual", true)
@@ -230,8 +311,8 @@ describe("translate", () => {
         await removeOrShowPageTranslation("translationOnly", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectInPlaceTranslation(node.children[0])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectInPlaceTranslation(node.children[0]!)
 
         await removeOrShowPageTranslation("translationOnly", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -250,9 +331,9 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
         const wrapper = expectTranslationWrapper(node, "bilingual")
-        expect(wrapper).toBe(node.childNodes[0].childNodes[1])
+        expect(wrapper).toBe(node.childNodes[0]!.childNodes[1])
         expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
 
         await removeOrShowPageTranslation("bilingual", true)
@@ -269,8 +350,8 @@ describe("translate", () => {
         await removeOrShowPageTranslation("translationOnly", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectInPlaceTranslation(node.children[0])
+        expectNodeLabels(node.children[0]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectInPlaceTranslation(node.children[0]!)
 
         await removeOrShowPageTranslation("translationOnly", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -291,10 +372,10 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
         const wrapper = expectTranslationWrapper(node, "bilingual")
-        expect(wrapper).toBe(node.childNodes[0].childNodes[0].childNodes[1])
+        expect(wrapper).toBe(node.childNodes[0]!.childNodes[0]!.childNodes[1])
         expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
 
         await removeOrShowPageTranslation("bilingual", true)
@@ -313,9 +394,9 @@ describe("translate", () => {
         await removeOrShowPageTranslation("translationOnly", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectInPlaceTranslation(node.children[0].children[0])
+        expectNodeLabels(node.children[0]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectInPlaceTranslation(node.children[0]!.children[0]!)
 
         await removeOrShowPageTranslation("translationOnly", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -336,10 +417,10 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[0], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[0]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
         const wrapper = expectTranslationWrapper(node, "bilingual")
-        expect(wrapper).toBe(node.childNodes[0].childNodes[0].childNodes[1])
+        expect(wrapper).toBe(node.childNodes[0]!.childNodes[0]!.childNodes[1])
         expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
 
         await removeOrShowPageTranslation("bilingual", true)
@@ -358,9 +439,9 @@ describe("translate", () => {
         await removeOrShowPageTranslation("translationOnly", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[0], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectInPlaceTranslation(node.children[0].children[0])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[0]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectInPlaceTranslation(node.children[0]!.children[0]!)
 
         await removeOrShowPageTranslation("translationOnly", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -381,10 +462,10 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
         const wrapper = expectTranslationWrapper(node, "bilingual")
-        expect(wrapper).toBe(node.childNodes[0].childNodes[0].childNodes[1])
+        expect(wrapper).toBe(node.childNodes[0]!.childNodes[0]!.childNodes[1])
         expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
 
         await removeOrShowPageTranslation("bilingual", true)
@@ -403,9 +484,9 @@ describe("translate", () => {
         await removeOrShowPageTranslation("translationOnly", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectInPlaceTranslation(node.children[0].children[0])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectInPlaceTranslation(node.children[0]!.children[0]!)
 
         await removeOrShowPageTranslation("translationOnly", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -427,10 +508,10 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
         const wrapper = expectTranslationWrapper(node, "bilingual")
-        expect(wrapper).toBe(node.childNodes[0].childNodes[2])
+        expect(wrapper).toBe(node.childNodes[0]!.childNodes[2])
         expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
 
         await removeOrShowPageTranslation("bilingual", true)
@@ -450,9 +531,9 @@ describe("translate", () => {
         await removeOrShowPageTranslation("translationOnly", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
         const wrapper = expectTranslationWrapper(node, "translationOnly")
-        expect(wrapper).toBe(node.childNodes[0].childNodes[0])
+        expect(wrapper).toBe(node.childNodes[0]!.childNodes[0])
 
         await removeOrShowPageTranslation("translationOnly", true)
 
@@ -475,13 +556,13 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[1], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        const wrapper = expectTranslationWrapper(node.children[0], "bilingual")
-        expect(wrapper).toBe(node.children[0].lastChild)
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[1]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(node.children[0]!, "bilingual")
+        expect(wrapper).toBe(node.children[0]!.lastChild)
         expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
-        expect(node.children[0].querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)).toHaveLength(1)
+        expect(node.children[0]!.querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)).toHaveLength(1)
 
         await removeOrShowPageTranslation("bilingual", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -501,10 +582,10 @@ describe("translate", () => {
         await removeOrShowPageTranslation("translationOnly", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        const wrapper = expectTranslationWrapper(node.children[0], "translationOnly")
-        expect(wrapper).toBe(node.children[0].firstChild)
-        expect(node.children[0].children).toHaveLength(1)
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(node.children[0]!, "translationOnly")
+        expect(wrapper).toBe(node.children[0]!.firstChild)
+        expect(node.children[0]!.children).toHaveLength(1)
 
         await removeOrShowPageTranslation("translationOnly", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -525,14 +606,14 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[1], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[2], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        const wrapper = expectTranslationWrapper(node.children[0], "bilingual")
-        expect(wrapper).toBe(node.children[0].lastChild)
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[1]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[2]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(node.children[0]!, "bilingual")
+        expect(wrapper).toBe(node.children[0]!.lastChild)
         expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
-        expect(node.children[0].querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)).toHaveLength(1)
+        expect(node.children[0]!.querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)).toHaveLength(1)
 
         await removeOrShowPageTranslation("bilingual", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -551,10 +632,10 @@ describe("translate", () => {
         await removeOrShowPageTranslation("translationOnly", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        const wrapper = expectTranslationWrapper(node.children[0], "translationOnly")
-        expect(wrapper).toBe(node.children[0].firstChild)
-        expect(node.children[0].children).toHaveLength(1)
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(node.children[0]!, "translationOnly")
+        expect(wrapper).toBe(node.children[0]!.firstChild)
+        expect(node.children[0]!.children).toHaveLength(1)
 
         await removeOrShowPageTranslation("translationOnly", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -610,7 +691,11 @@ describe("translate", () => {
           await removeOrShowPageTranslation("bilingual", true)
 
           expect(translateTextForPage).toHaveBeenCalledTimes(1)
-          expect(translateTextForPage).toHaveBeenCalledWith(sourceText, "plain")
+          expect(translateTextForPage).toHaveBeenCalledWith(
+            sourceText,
+            "plain",
+            DEFAULT_PAGE_TRANSLATION_OPTIONS,
+          )
           const wrapper = expectTranslationWrapper(deepestSpan, "bilingual")
           expect(wrapper).toBe(deepestSpan.lastChild)
           expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
@@ -643,7 +728,11 @@ describe("translate", () => {
           await removeOrShowPageTranslation("bilingual", true)
 
           expect(translateTextForPage).toHaveBeenCalledTimes(1)
-          expect(translateTextForPage).toHaveBeenCalledWith(sourceText, "plain")
+          expect(translateTextForPage).toHaveBeenCalledWith(
+            sourceText,
+            "plain",
+            DEFAULT_PAGE_TRANSLATION_OPTIONS,
+          )
           const [wrapper] = expectBlockTranslations(tweet, [translatedText])
           expect(sourceSpan.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
           expect([...tweet.children]).toEqual([sourceSpan, ...emojiImages, wrapper])
@@ -681,7 +770,11 @@ describe("translate", () => {
           await removeOrShowPageTranslation("translationOnly", true)
 
           expect(translateTextForPage).toHaveBeenCalledTimes(1)
-          expect(translateTextForPage).toHaveBeenCalledWith(sourceText, "html")
+          expect(translateTextForPage).toHaveBeenCalledWith(
+            sourceText,
+            "html",
+            DEFAULT_PAGE_TRANSLATION_OPTIONS,
+          )
           expectInPlaceTranslation(sourceSpan, translatedText)
           expect(sourceSpan.firstChild).toBe(sourceTextNode)
           expect([...tweet.children]).toEqual([sourceSpan, ...emojiImages])
@@ -735,12 +828,17 @@ describe("translate", () => {
 
           expect(translateTextForPage).toHaveBeenCalledTimes(2)
           paragraphs.forEach((paragraph, index) => {
-            expect(translateTextForPage).toHaveBeenNthCalledWith(index + 1, paragraph, "plain")
+            expect(translateTextForPage).toHaveBeenNthCalledWith(
+              index + 1,
+              paragraph,
+              "plain",
+              PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+            )
           })
           const wrappers = expectBlockTranslations(tweet, translations)
-          expect(wrappers[0].previousSibling).toBe(emojiImages[1])
+          expect(wrappers[0]!.previousSibling).toBe(emojiImages[1])
           expect(wrappers[1]).toBe(tweet.lastElementChild)
-          expect(wrappers[1].previousSibling).toBe(emojiImages.at(-1))
+          expect(wrappers[1]!.previousSibling).toBe(emojiImages.at(-1))
 
           await removeOrShowPageTranslation("bilingual", true)
 
@@ -770,8 +868,8 @@ describe("translate", () => {
             wrapper.textContent = `Old translation ${index + 1}`
             return wrapper
           })
-          sourceSpan.insertBefore(orphanWrappers[0], tail)
-          sourceSpan.append(orphanWrappers[1])
+          sourceSpan.insertBefore(orphanWrappers[0]!, tail)
+          sourceSpan.append(orphanWrappers[1]!)
 
           await removeOrShowPageTranslation("bilingual", true)
 
@@ -831,9 +929,24 @@ describe("translate", () => {
           })
 
           expect(translateTextForPage).toHaveBeenCalledTimes(3)
-          expect(translateTextForPage).toHaveBeenNthCalledWith(1, truncatedRequestText, "plain")
-          expect(translateTextForPage).toHaveBeenNthCalledWith(2, expandedFirstParagraph, "plain")
-          expect(translateTextForPage).toHaveBeenNthCalledWith(3, hashtagParagraph, "plain")
+          expect(translateTextForPage).toHaveBeenNthCalledWith(
+            1,
+            truncatedRequestText,
+            "plain",
+            PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+          )
+          expect(translateTextForPage).toHaveBeenNthCalledWith(
+            2,
+            expandedFirstParagraph,
+            "plain",
+            PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+          )
+          expect(translateTextForPage).toHaveBeenNthCalledWith(
+            3,
+            hashtagParagraph,
+            "plain",
+            PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+          )
           expectBlockTranslations(tweet, [translations.expanded, translations.hashtags])
           expect(tweet).not.toHaveTextContent(translations.truncated)
           expectTextInDocumentOrder(tweet, [
@@ -940,19 +1053,29 @@ describe("translate", () => {
           const translationPromise = removeOrShowPageTranslation("bilingual", true)
           await waitFor(() => expect(translateTextForPage).toHaveBeenCalledTimes(2))
 
-          resolveSecond(translations[1])
+          resolveSecond(translations[1]!)
           await Promise.resolve()
-          resolveFirst(translations[0])
+          resolveFirst(translations[0]!)
           await translationPromise
 
-          expect(translateTextForPage).toHaveBeenNthCalledWith(1, paragraphs[0], "plain")
-          expect(translateTextForPage).toHaveBeenNthCalledWith(2, paragraphs[1], "plain")
+          expect(translateTextForPage).toHaveBeenNthCalledWith(
+            1,
+            paragraphs[0],
+            "plain",
+            PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+          )
+          expect(translateTextForPage).toHaveBeenNthCalledWith(
+            2,
+            paragraphs[1],
+            "plain",
+            PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+          )
           expectBlockTranslations(tweet, translations)
           expectTextInDocumentOrder(tweet, [
-            paragraphs[0],
-            translations[0],
-            paragraphs[1],
-            translations[1],
+            paragraphs[0]!,
+            translations[0]!,
+            paragraphs[1]!,
+            translations[1]!,
           ])
         })
       })
@@ -1135,8 +1258,8 @@ describe("translate", () => {
             return translatedText
           })
 
-          const mentionPrefix = paragraphs[0].split("@SohunSanka")[0]
-          const mentionSuffix = paragraphs[0].split("@SohunSanka")[1]
+          const mentionPrefix = paragraphs[0]!.split("@SohunSanka")[0]
+          const mentionSuffix = paragraphs[0]!.split("@SohunSanka")[1]
           const trailingText = `${mentionSuffix}\n\n${paragraphs.slice(1).join("\n\n")}`
           render(
             <div data-testid="tweetText" style={{ whiteSpace: "pre-wrap" }}>
@@ -1160,12 +1283,17 @@ describe("translate", () => {
 
           expect(translateTextForPage).toHaveBeenCalledTimes(5)
           paragraphs.forEach((paragraph, index) => {
-            expect(translateTextForPage).toHaveBeenNthCalledWith(index + 1, paragraph, "plain")
+            expect(translateTextForPage).toHaveBeenNthCalledWith(
+              index + 1,
+              paragraph,
+              "plain",
+              PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+            )
           })
           expectBlockTranslations(tweet, translations)
           expectTextInDocumentOrder(
             tweet,
-            paragraphs.flatMap((paragraph, index) => [paragraph, translations[index]]),
+            paragraphs.flatMap((paragraph, index) => [paragraph, translations[index]!]),
           )
           expect(tweet.querySelector("a")).toBe(mention)
           expect(mention.firstChild).toBe(mentionTextNode)
@@ -1218,12 +1346,17 @@ describe("translate", () => {
 
           expect(translateTextForPage).toHaveBeenCalledTimes(3)
           paragraphs.forEach((paragraph, index) => {
-            expect(translateTextForPage).toHaveBeenNthCalledWith(index + 1, paragraph, "plain")
+            expect(translateTextForPage).toHaveBeenNthCalledWith(
+              index + 1,
+              paragraph,
+              "plain",
+              PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+            )
           })
           expectBlockTranslations(tweet, translations)
           expectTextInDocumentOrder(
             tweet,
-            paragraphs.flatMap((paragraph, index) => [paragraph, translations[index]]),
+            paragraphs.flatMap((paragraph, index) => [paragraph, translations[index]!]),
           )
           hashtags.forEach((hashtag, index) => {
             expect(tweet.querySelectorAll("a")[index]).toBe(hashtag)
@@ -1249,7 +1382,11 @@ describe("translate", () => {
             await removeOrShowPageTranslation("bilingual", true)
 
             expect(translateTextForPage).toHaveBeenCalledTimes(1)
-            expect(translateTextForPage).toHaveBeenCalledWith(sourceText, "plain")
+            expect(translateTextForPage).toHaveBeenCalledWith(
+              sourceText,
+              "plain",
+              DEFAULT_PAGE_TRANSLATION_OPTIONS,
+            )
             expectBlockTranslations(tweet, ["【整段译文】"])
           })
         },
@@ -1269,7 +1406,11 @@ describe("translate", () => {
           await removeOrShowPageTranslation("bilingual", true)
 
           expect(translateTextForPage).toHaveBeenCalledTimes(1)
-          expect(translateTextForPage).toHaveBeenCalledWith(sourceText, "plain")
+          expect(translateTextForPage).toHaveBeenCalledWith(
+            sourceText,
+            "plain",
+            PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+          )
           expectBlockTranslations(tweet, ["【标签整段译文】"])
         })
       })
@@ -1290,7 +1431,11 @@ describe("translate", () => {
           await removeOrShowPageTranslation("bilingual", true)
 
           expect(translateTextForPage).toHaveBeenCalledTimes(1)
-          expect(translateTextForPage).toHaveBeenCalledWith("Translate this paragraph.", "plain")
+          expect(translateTextForPage).toHaveBeenCalledWith(
+            "Translate this paragraph.",
+            "plain",
+            PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+          )
           expectBlockTranslations(tweet, ["【唯一译文】"])
           expectTextInDocumentOrder(tweet, [
             "Translate this paragraph.",
@@ -1351,7 +1496,7 @@ describe("translate", () => {
           expect(getTranslationWrappers(tweet)).toHaveLength(0)
           expect(hostReplacement.isConnected).toBe(true)
           expect(tweet).toHaveTextContent("Host-updated first paragraph.")
-          expect(tweet).not.toHaveTextContent(paragraphs[0])
+          expect(tweet).not.toHaveTextContent(paragraphs[0]!)
         })
       })
     })
@@ -1382,8 +1527,16 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expect(translateTextForPage).toHaveBeenCalledTimes(2)
-        expect(translateTextForPage).toHaveBeenCalledWith(nestedText, "plain")
-        expect(translateTextForPage).toHaveBeenCalledWith(mixedText, "plain")
+        expect(translateTextForPage).toHaveBeenCalledWith(
+          nestedText,
+          "plain",
+          DEFAULT_PAGE_TRANSLATION_OPTIONS,
+        )
+        expect(translateTextForPage).toHaveBeenCalledWith(
+          mixedText,
+          "plain",
+          DEFAULT_PAGE_TRANSLATION_OPTIONS,
+        )
 
         const nestedWrapper = expectTranslationWrapper(deepestSpan, "bilingual")
         expect(nestedWrapper).toBe(deepestSpan.lastChild)
@@ -1447,15 +1600,102 @@ describe("translate", () => {
       )
       const node = screen.getByTestId("test-node")
       const contents = node.children[0]
-      const deepestSpan = contents.querySelector("span")!
+      const deepestSpan = contents!.querySelector("span")!
 
       await removeOrShowPageTranslation("bilingual", true)
 
       const wrapper = expectTranslationWrapper(deepestSpan, "bilingual")
       expect(wrapper).toBe(deepestSpan.lastChild)
       expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
-      expect(contents.querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)).toHaveLength(1)
+      expect(contents!.querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)).toHaveLength(1)
     })
+  })
+
+  // lowendtalk.com (Vanilla Forums): with the whole page translated, a post or
+  // comment header's div.AuthorWrap is a paragraph. Translation-only mode sends
+  // the header run as HTML and swaps the reply into every text node and
+  // translatable attribute below it, so the author block (the avatar link's
+  // title, the img's alt and the username) has to be excluded as a whole.
+  // Excluding only .Username left it inside the serialized span.Author, and
+  // every username, avatar title and alt came back rewritten.
+  describe("LowEndTalk post and comment headers", () => {
+    // Marks every text node and title/alt value it receives, as a provider
+    // translating the whole request would.
+    function markTranslated(request: string, format?: string): string {
+      const mark = (value: string) => (value.trim() ? `ZH(${value.trim()})` : value)
+      if (format !== "html") return mark(request)
+      const template = document.createElement("template")
+      template.innerHTML = request
+      const visit = (node: Node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+          node.textContent = mark(node.textContent ?? "")
+          return
+        }
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          const element = node as Element
+          for (const name of ["title", "alt"]) {
+            const value = element.getAttribute(name)
+            if (value !== null) element.setAttribute(name, mark(value))
+          }
+        }
+        node.childNodes.forEach(visit)
+      }
+      template.content.childNodes.forEach(visit)
+      return template.innerHTML
+    }
+
+    beforeEach(() => {
+      vi.mocked(translateTextForPage)
+        .mockReset()
+        .mockImplementation(async (request, format) => markTranslated(request, format))
+    })
+
+    afterEach(() => {
+      vi.mocked(translateTextForPage).mockReset().mockResolvedValue(MOCK_TRANSLATION)
+    })
+
+    it.each(["bilingual", "translationOnly"] as const)(
+      "translates the role but not the author's name, avatar title or alt in %s mode",
+      async (mode) => {
+        await withHost(
+          "lowendtalk.com",
+          async () => {
+            render(
+              <div className="Item-Header CommentHeader">
+                <div className="AuthorWrap" data-testid="author-wrap">
+                  <span className="Author">
+                    <a title="PuDLeZ" href="/profile/PuDLeZ" className="PhotoWrap">
+                      <img src="avatar.png" alt="PuDLeZ" className="ProfilePhoto" />
+                    </a>
+                    <a href="/profile/PuDLeZ" className="Username">
+                      PuDLeZ
+                    </a>
+                  </span>{" "}
+                  <span className="AuthorInfo">
+                    <span className="MItem RoleTitle">Member</span>
+                  </span>
+                </div>
+              </div>,
+            )
+            const authorWrap = screen.getByTestId("author-wrap")
+
+            await removeOrShowPageTranslation(mode, true)
+
+            const requests = vi
+              .mocked(translateTextForPage)
+              .mock.calls.map(([request]) => request)
+              .join("\n")
+            expect(requests).toContain("Member")
+            expect(requests).not.toContain("PuDLeZ")
+            expect(authorWrap.querySelector(".Username")?.textContent).toBe("PuDLeZ")
+            expect(authorWrap.querySelector(".PhotoWrap")?.getAttribute("title")).toBe("PuDLeZ")
+            expect(authorWrap.querySelector("img")?.getAttribute("alt")).toBe("PuDLeZ")
+            expect(authorWrap).toHaveTextContent("ZH(Member)")
+          },
+          "/discussion/222844/example",
+        )
+      },
+    )
   })
 
   describe("block node with multiple child nodes", () => {
@@ -1472,9 +1712,9 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[1], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[2], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[1]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[2]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
 
         const wrapper = expectTranslationWrapper(node, "bilingual")
         expect(wrapper).toBe(node.lastChild)
@@ -1525,8 +1765,8 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[1], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[1]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
 
         // Should have single translation wrapper at the end (one paragraph)
         const wrapper = expectTranslationWrapper(node, "bilingual")
@@ -1602,8 +1842,8 @@ describe("translate", () => {
         expect(wrapper1).toBe(node.childNodes[2])
         // force translate span as inline even it's block node
         expectTranslatedContent(wrapper1, INLINE_CONTENT_CLASS)
-        const wrapper2 = expectTranslationWrapper(node.children[2], "bilingual")
-        expect(wrapper2).toBe(node.childNodes[3].childNodes[1])
+        const wrapper2 = expectTranslationWrapper(node.children[2]!, "bilingual")
+        expect(wrapper2).toBe(node.childNodes[3]!.childNodes[1])
         expectTranslatedContent(wrapper2, BLOCK_CONTENT_CLASS)
         const wrapper3 = node.lastChild
         expect(wrapper3).toHaveClass(CONTENT_WRAPPER_CLASS)
@@ -1633,7 +1873,7 @@ describe("translate", () => {
         const wrapper1 = expectTranslationWrapper(node, "translationOnly")
         expect(wrapper1).toBe(node.childNodes[0])
         // Run inside the block <div>: single text node, swapped in place.
-        expectInPlaceTranslation(node.children[1])
+        expectInPlaceTranslation(node.children[1]!)
         // Trailing text run: swapped in place; its anchor is the paragraph.
         expect(node).toHaveAttribute(TRANSLATION_ONLY_ATTRIBUTE)
         const lastChild = node.lastChild as Text
@@ -1662,8 +1902,8 @@ describe("translate", () => {
           await removeOrShowPageTranslation("bilingual", true)
 
           expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-          expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-          expectNodeLabels(node.children[1], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+          expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+          expectNodeLabels(node.children[1]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
           const wrapper = expectTranslationWrapper(node, "bilingual")
           expect(wrapper).toBe(node.lastChild)
           expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
@@ -1707,8 +1947,8 @@ describe("translate", () => {
 
           expectNodeLabels(node, [BLOCK_ATTRIBUTE])
           // jsdom returns display:inline for floated spans (no blockification)
-          expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-          expectNodeLabels(node.children[1], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+          expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+          expectNodeLabels(node.children[1]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
         })
       })
       describe("float: left without inline next sibling should NOT be treated as large initial letter", () => {
@@ -1723,7 +1963,7 @@ describe("translate", () => {
 
           expectNodeLabels(node, [BLOCK_ATTRIBUTE])
           // jsdom returns display:inline for floated spans (no blockification)
-          expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+          expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
         })
         it("bilingual mode: float left span with block next sibling remains inline in jsdom", async () => {
           // https://theqoo.net/genrefiction/1771494967
@@ -1738,12 +1978,42 @@ describe("translate", () => {
 
           expectNodeLabels(node, [BLOCK_ATTRIBUTE])
           // jsdom returns display:inline for floated spans (no blockification)
-          expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-          expectNodeLabels(node.children[1], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+          expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+          expectNodeLabels(node.children[1]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
         })
       })
-      describe("block translations beside floated siblings", () => {
-        it("bilingual mode: marks block translation for float wrap when inline-block would drop below the float", async () => {
+      describe("block translations displaced below a float", () => {
+        // The translation is an inline-block: a float can push the whole box
+        // below itself instead of wrapping text beside it. Detection is by
+        // measurement, so these tests drive the two rects it reads — the source
+        // text preceding the wrapper (a Range) and the translated node.
+        function mockLayout({
+          sourceBottom,
+          translatedTop,
+        }: {
+          sourceBottom: number
+          translatedTop: number
+        }) {
+          const rangeSpy = vi
+            .spyOn(Range.prototype, "getBoundingClientRect")
+            .mockImplementation(() =>
+              createRect({ top: sourceBottom - 20, left: 0, width: 600, height: 20 }),
+            )
+          const rectSpy = vi
+            .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+            .mockImplementation(function (this: HTMLElement) {
+              if (this.classList.contains(BLOCK_CONTENT_CLASS)) {
+                return createRect({ top: translatedTop, left: 0, width: 500, height: 40 })
+              }
+              return createRect({ top: 0, left: 0, width: 200, height: 20 })
+            })
+          return () => {
+            rangeSpy.mockRestore()
+            rectSpy.mockRestore()
+          }
+        }
+
+        it("bilingual mode: marks block translation for float wrap when it drops below the float", async () => {
           render(
             <div data-testid="test-node">
               <figure data-testid="float-node" style={{ float: "right" }}>
@@ -1754,27 +2024,14 @@ describe("translate", () => {
           )
           const node = screen.getByTestId("test-node")
           const paragraph = screen.getByTestId("paragraph")
-          const floatNode = screen.getByTestId("float-node")
 
-          const rectSpy = vi
-            .spyOn(HTMLElement.prototype, "getBoundingClientRect")
-            .mockImplementation(function (this: HTMLElement) {
-              if (this === floatNode) {
-                return createRect({ top: 80, left: 600, width: 200, height: 320 })
-              }
-              if (this === paragraph) {
-                return createRect({ top: 100, left: 0, width: 600, height: 60 })
-              }
-              if (this.classList.contains(BLOCK_CONTENT_CLASS)) {
-                return createRect({ top: 420, left: 0, width: 500, height: 40 })
-              }
-              return createRect({ top: 0, left: 0, width: 200, height: 20 })
-            })
-
+          // Source text ends at 160, translation lands at 420 — far past the
+          // float, well beyond one line of normal spacing.
+          const restore = mockLayout({ sourceBottom: 160, translatedTop: 420 })
           try {
             await removeOrShowPageTranslation("bilingual", true)
           } finally {
-            rectSpy.mockRestore()
+            restore()
           }
 
           expectNodeLabels(node, [BLOCK_ATTRIBUTE])
@@ -1784,7 +2041,7 @@ describe("translate", () => {
           expect(translatedContent).toHaveAttribute(FLOAT_WRAP_ATTRIBUTE, "true")
         })
 
-        it("bilingual mode: leaves block translation unchanged when the translated node stays beside the float", async () => {
+        it("bilingual mode: leaves block translation unchanged when it stays on the next line", async () => {
           render(
             <div data-testid="test-node">
               <figure data-testid="float-node" style={{ float: "right" }}>
@@ -1794,27 +2051,14 @@ describe("translate", () => {
             </div>,
           )
           const paragraph = screen.getByTestId("paragraph")
-          const floatNode = screen.getByTestId("float-node")
 
-          const rectSpy = vi
-            .spyOn(HTMLElement.prototype, "getBoundingClientRect")
-            .mockImplementation(function (this: HTMLElement) {
-              if (this === floatNode) {
-                return createRect({ top: 80, left: 600, width: 200, height: 320 })
-              }
-              if (this === paragraph) {
-                return createRect({ top: 420, left: 0, width: 600, height: 60 })
-              }
-              if (this.classList.contains(BLOCK_CONTENT_CLASS)) {
-                return createRect({ top: 500, left: 0, width: 500, height: 40 })
-              }
-              return createRect({ top: 0, left: 0, width: 200, height: 20 })
-            })
-
+          // Translation opens the line right after the source text: an
+          // ordinary top-margin gap, not a float drop.
+          const restore = mockLayout({ sourceBottom: 160, translatedTop: 168 })
           try {
             await removeOrShowPageTranslation("bilingual", true)
           } finally {
-            rectSpy.mockRestore()
+            restore()
           }
 
           const wrapper = expectTranslationWrapper(paragraph, "bilingual")
@@ -1839,11 +2083,11 @@ describe("translate", () => {
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
         const wrapper1 = node.children[0]
-        expectTranslatedContent(wrapper1, BLOCK_CONTENT_CLASS)
+        expectTranslatedContent(wrapper1!, BLOCK_CONTENT_CLASS)
         const wrapper2 = node.children[2]
-        expectTranslatedContent(wrapper2, BLOCK_CONTENT_CLASS)
+        expectTranslatedContent(wrapper2!, BLOCK_CONTENT_CLASS)
         const wrapper3 = node.children[4]
-        expectTranslatedContent(wrapper3, BLOCK_CONTENT_CLASS)
+        expectTranslatedContent(wrapper3!, BLOCK_CONTENT_CLASS)
 
         await removeOrShowPageTranslation("bilingual", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -1871,11 +2115,11 @@ describe("translate", () => {
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
         const wrapper1 = node.children[0]
-        expectTranslatedContent(wrapper1, BLOCK_CONTENT_CLASS)
+        expectTranslatedContent(wrapper1!, BLOCK_CONTENT_CLASS)
         const wrapper2 = node.children[2]
-        expectTranslatedContent(wrapper2, BLOCK_CONTENT_CLASS)
+        expectTranslatedContent(wrapper2!, BLOCK_CONTENT_CLASS)
         const wrapper3 = node.children[4]
-        expectTranslatedContent(wrapper3, BLOCK_CONTENT_CLASS)
+        expectTranslatedContent(wrapper3!, BLOCK_CONTENT_CLASS)
 
         await removeOrShowPageTranslation("bilingual", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -1898,17 +2142,17 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        const wrapper1 = expectTranslationWrapper(node.children[0], "bilingual")
-        expect(wrapper1).toBe(node.childNodes[0].childNodes[1])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper1 = expectTranslationWrapper(node.children[0]!, "bilingual")
+        expect(wrapper1).toBe(node.childNodes[0]!.childNodes[1])
         expectTranslatedContent(wrapper1, INLINE_CONTENT_CLASS)
-        expectNodeLabels(node.children[2], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[2]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
         const wrapper2 = node.children[3]
         expect(wrapper2).toHaveClass(CONTENT_WRAPPER_CLASS)
-        expectTranslatedContent(wrapper2, BLOCK_CONTENT_CLASS)
-        expectNodeLabels(node.children[5], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        const wrapper3 = expectTranslationWrapper(node.children[5], "bilingual")
-        expect(wrapper3).toBe(node.children[5].childNodes[1])
+        expectTranslatedContent(wrapper2!, BLOCK_CONTENT_CLASS)
+        expectNodeLabels(node.children[5]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper3 = expectTranslationWrapper(node.children[5]!, "bilingual")
+        expect(wrapper3).toBe(node.children[5]!.childNodes[1])
         expectTranslatedContent(wrapper3, INLINE_CONTENT_CLASS)
 
         await removeOrShowPageTranslation("bilingual", true)
@@ -1933,13 +2177,13 @@ describe("translate", () => {
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
         // Run [span]: descends to its single text node, swapped in place.
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectInPlaceTranslation(node.children[0])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectInPlaceTranslation(node.children[0]!)
         // Run [span, text]: mixed inline run keeps the wrapper fallback.
         const wrapper2 = node.childNodes[2]
         expect(wrapper2).toHaveClass(CONTENT_WRAPPER_CLASS)
         // Run [span]: swapped in place.
-        expectInPlaceTranslation(node.children[4])
+        expectInPlaceTranslation(node.children[4]!)
 
         await removeOrShowPageTranslation("translationOnly", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -1965,7 +2209,7 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[1], [INLINE_ATTRIBUTE])
+        expectNodeLabels(node.children[1]!, [INLINE_ATTRIBUTE])
         const wrapper = expectTranslationWrapper(node, "bilingual")
         expect(wrapper).toBe(node.lastChild)
         expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
@@ -2017,7 +2261,7 @@ describe("translate", () => {
 
         // The span should be labeled as INLINE, not BLOCK, because it has only one meaningful child
         expectNodeLabels(inlineSpan, [INLINE_ATTRIBUTE])
-        expectNodeLabels(inlineSpan.children[0], [BLOCK_ATTRIBUTE])
+        expectNodeLabels(inlineSpan.children[0]!, [BLOCK_ATTRIBUTE])
       })
       it("should translate inside the inline parent using the outer block layout", async () => {
         render(
@@ -2031,13 +2275,13 @@ describe("translate", () => {
         const node = screen.getByTestId("test-node")
         await removeOrShowPageTranslation("bilingual", true)
 
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[0], [BLOCK_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[0]!, [BLOCK_ATTRIBUTE])
 
-        const wrapper = expectTranslationWrapper(node.children[0], "bilingual")
-        expect(wrapper).toBe(node.children[0].lastChild)
+        const wrapper = expectTranslationWrapper(node.children[0]!, "bilingual")
+        expect(wrapper).toBe(node.children[0]!.lastChild)
         expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
-        expect(node.children[0].querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)).toHaveLength(1)
+        expect(node.children[0]!.querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)).toHaveLength(1)
 
         await removeOrShowPageTranslation("bilingual", true)
         expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -2058,13 +2302,13 @@ describe("translate", () => {
         const node = screen.getByTestId("test-node")
         await removeOrShowPageTranslation("bilingual", true)
 
-        expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE])
-        expectNodeLabels(node.children[0].children[0], [BLOCK_ATTRIBUTE])
-        const wrapper = expectTranslationWrapper(node.children[0].children[0], "bilingual")
-        expect(wrapper).toBe(node.children[0].children[0].lastChild)
+        expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!.children[0]!, [BLOCK_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(node.children[0]!.children[0]!, "bilingual")
+        expect(wrapper).toBe(node.children[0]!.children[0]!.lastChild)
         expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
         expect(
-          node.children[0].children[0].querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`),
+          node.children[0]!.children[0]!.querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`),
         ).toHaveLength(1)
 
         await removeOrShowPageTranslation("bilingual", true)
@@ -2152,9 +2396,9 @@ describe("translate", () => {
       await removeOrShowPageTranslation("bilingual", true)
 
       expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-      expectNodeLabels(node.children[2], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-      const wrapper = expectTranslationWrapper(node.children[2], "bilingual")
-      expect(wrapper).toBe(node.children[2].lastChild)
+      expectNodeLabels(node.children[2]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+      const wrapper = expectTranslationWrapper(node.children[2]!, "bilingual")
+      expect(wrapper).toBe(node.children[2]!.lastChild)
       expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
 
       await removeOrShowPageTranslation("bilingual", true)
@@ -2176,8 +2420,8 @@ describe("translate", () => {
       await removeOrShowPageTranslation("translationOnly", true)
 
       expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-      expectNodeLabels(node.children[2], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-      expectInPlaceTranslation(node.children[2])
+      expectNodeLabels(node.children[2]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+      expectInPlaceTranslation(node.children[2]!)
 
       await removeOrShowPageTranslation("translationOnly", true)
       expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -2200,10 +2444,10 @@ describe("translate", () => {
       const node = screen.getByTestId("test-node")
       await removeOrShowPageTranslation("bilingual", true)
 
-      expectNodeLabels(node.children[0], [BLOCK_ATTRIBUTE])
-      expectNodeLabels(node.children[0].children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-      const wrapper = expectTranslationWrapper(node.children[0].children[0], "bilingual")
-      expect(wrapper).toBe(node.children[0].children[0].lastChild)
+      expectNodeLabels(node.children[0]!, [BLOCK_ATTRIBUTE])
+      expectNodeLabels(node.children[0]!.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+      const wrapper = expectTranslationWrapper(node.children[0]!.children[0]!, "bilingual")
+      expect(wrapper).toBe(node.children[0]!.children[0]!.lastChild)
       expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
 
       await removeOrShowPageTranslation("bilingual", true)
@@ -2223,9 +2467,9 @@ describe("translate", () => {
       const node = screen.getByTestId("test-node")
       await removeOrShowPageTranslation("bilingual", true)
 
-      expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-      const wrapper = expectTranslationWrapper(node.children[0], "bilingual")
-      expect(wrapper).toBe(node.children[0].lastChild)
+      expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+      const wrapper = expectTranslationWrapper(node.children[0]!, "bilingual")
+      expect(wrapper).toBe(node.children[0]!.lastChild)
       expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
 
       await removeOrShowPageTranslation("bilingual", true)
@@ -2243,8 +2487,8 @@ describe("translate", () => {
       const node = screen.getByTestId("test-node")
       await removeOrShowPageTranslation("translationOnly", true)
 
-      expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-      expectInPlaceTranslation(node.children[0])
+      expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+      expectInPlaceTranslation(node.children[0]!)
 
       await removeOrShowPageTranslation("translationOnly", true)
       expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -2287,8 +2531,8 @@ describe("translate", () => {
       // Single-text-node run: the provider's hallucinated <div> is flattened
       // to plain text and swapped into the site's own text node.
       const anchor = node.children[0]
-      expectInPlaceTranslation(anchor)
-      expect(anchor.children).toHaveLength(0)
+      expectInPlaceTranslation(anchor!)
+      expect(anchor!.children).toHaveLength(0)
 
       await removeOrShowPageTranslation("translationOnly", true)
       expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -2367,6 +2611,389 @@ describe("translate", () => {
     })
   })
 
+  describe("bilingual inline atoms (formulas)", () => {
+    const mathml = (id: string, symbol: string) =>
+      `<math id="${id}" class="ltx_Math" alttext="${symbol}" display="inline"><semantics><mi>${symbol}</mi><annotation encoding="application/x-tex">${symbol}</annotation></semantics></math>`
+    const katex = (symbol: string) =>
+      `<span class="katex"><span class="katex-mathml"><math><semantics><mi>${symbol}</mi><annotation encoding="application/x-tex">${symbol}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="katex-base"><span class="mord mathnormal">${symbol}</span></span></span></span>`
+
+    beforeEach(() => {
+      vi.mocked(translateTextForPage).mockReset().mockResolvedValue(MOCK_TRANSLATION)
+    })
+
+    afterEach(() => {
+      vi.mocked(translateTextForPage).mockReset().mockResolvedValue(MOCK_TRANSLATION)
+    })
+
+    it("sends placeholders, clones the formulas at their translated positions and restores cleanly", async () => {
+      vi.mocked(translateTextForPage).mockImplementation(async (text) =>
+        text === "Let {{0}} be smaller than {{1}}." ? "设 {{1}} 大于 {{0}}。" : MOCK_TRANSLATION,
+      )
+      render(<p data-testid="test-node" />)
+      const node = screen.getByTestId("test-node")
+      node.innerHTML = `Let ${mathml("m1", "x")} be smaller than ${mathml("m2", "y")}.`
+      const sourceMath = [...node.querySelectorAll("math")]
+
+      await removeOrShowPageTranslation("bilingual", true)
+
+      expect(translateTextForPage).toHaveBeenCalledWith(
+        "Let {{0}} be smaller than {{1}}.",
+        "plain",
+        DEFAULT_PAGE_TRANSLATION_OPTIONS,
+      )
+      const wrapper = expectTranslationWrapper(node, "bilingual")!
+      const clones = [...wrapper.querySelectorAll("math")]
+      expect(clones).toHaveLength(2)
+      expect(clones[0]?.getAttribute("alttext")).toBe("y")
+      expect(clones[1]?.getAttribute("alttext")).toBe("x")
+      expect(
+        clones.every(
+          (clone) => clone.classList.contains(INLINE_ATOM_CLASS) && !clone.hasAttribute("id"),
+        ),
+      ).toBe(true)
+      expect(clones).not.toContain(sourceMath[0])
+      expect(clones).not.toContain(sourceMath[1])
+      expect(wrapper.textContent).toBe("设 y 大于 x。")
+      // The source formulas are untouched.
+      expect(sourceMath.every((math) => math.isConnected && math.hasAttribute("id"))).toBe(true)
+
+      await removeOrShowPageTranslation("bilingual", true)
+
+      expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeNull()
+      expect([...node.querySelectorAll("math")]).toEqual(sourceMath)
+    })
+
+    it("renders each KaTeX formula exactly once with no glyph soup in the request", async () => {
+      vi.mocked(translateTextForPage).mockImplementation(async (text) =>
+        text.includes("{{0}}") ? "时间常数为 {{0}}。" : MOCK_TRANSLATION,
+      )
+      render(<p data-testid="test-node" />)
+      const node = screen.getByTestId("test-node")
+      node.innerHTML = `The time constant was ${katex("τ")}.`
+
+      await removeOrShowPageTranslation("bilingual", true)
+
+      const [request] = vi.mocked(translateTextForPage).mock.calls[0]!
+      expect(request).toBe("The time constant was {{0}}.")
+      expect(request).not.toContain("τ")
+      const wrapper = expectTranslationWrapper(node, "bilingual")!
+      expect(wrapper.querySelectorAll(".katex")).toHaveLength(1)
+      expect(wrapper.querySelectorAll(".katex-mathml")).toHaveLength(0)
+      expect(wrapper.textContent).toBe("时间常数为 τ。")
+    })
+
+    it("never sends a formula-only run", async () => {
+      render(<p data-testid="test-node" />)
+      const node = screen.getByTestId("test-node")
+      node.innerHTML = `(${mathml("m1", "x")})`
+
+      await removeOrShowPageTranslation("bilingual", true)
+
+      expect(translateTextForPage).not.toHaveBeenCalled()
+      expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeNull()
+    })
+
+    it("hides an echoed translation that only returns the placeholders", async () => {
+      vi.mocked(translateTextForPage).mockImplementation(async (text) => text)
+      render(<p data-testid="test-node" />)
+      const node = screen.getByTestId("test-node")
+      node.innerHTML = `Let ${mathml("m1", "x")} be the mean.`
+
+      await removeOrShowPageTranslation("bilingual", true)
+
+      expect(translateTextForPage).toHaveBeenCalledWith(
+        "Let {{0}} be the mean.",
+        "plain",
+        DEFAULT_PAGE_TRANSLATION_OPTIONS,
+      )
+      expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeNull()
+    })
+
+    it("appends a formula whose placeholder the provider dropped", async () => {
+      vi.mocked(translateTextForPage).mockResolvedValue("设为均值。")
+      render(<p data-testid="test-node" />)
+      const node = screen.getByTestId("test-node")
+      node.innerHTML = `Let ${mathml("m1", "x")} be the mean.`
+
+      await removeOrShowPageTranslation("bilingual", true)
+
+      const wrapper = expectTranslationWrapper(node, "bilingual")!
+      expect(wrapper.querySelectorAll("math")).toHaveLength(1)
+      expect(wrapper.textContent).toBe("设为均值。 x")
+    })
+
+    it("keeps a newline-preserving container with a formula on the whole-run path", async () => {
+      vi.mocked(translateTextForPage).mockImplementation(async (text) =>
+        text.includes("{{0}}") ? "第一句 {{0}}。\n\n第二句。" : MOCK_TRANSLATION,
+      )
+      render(<div data-testid="test-node" style={{ whiteSpace: "pre-wrap" }} />)
+      const node = screen.getByTestId("test-node")
+      node.innerHTML = `First ${mathml("m1", "x")} sentence.\n\nSecond sentence.`
+
+      await removeOrShowPageTranslation("bilingual", true)
+
+      expect(vi.mocked(translateTextForPage).mock.calls).toEqual([
+        [
+          "First {{0}} sentence.\n\nSecond sentence.",
+          "plain",
+          PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+        ],
+      ])
+      const wrapper = expectTranslationWrapper(node, "bilingual")!
+      expect(wrapper.hasAttribute(VIRTUAL_PARAGRAPH_ATTRIBUTE)).toBe(false)
+      expect(wrapper.querySelectorAll("math")).toHaveLength(1)
+      expect(wrapper.textContent).toContain("第二句")
+    })
+
+    it("still splits the same container into virtual paragraphs without a formula", async () => {
+      render(<div data-testid="test-node" style={{ whiteSpace: "pre-wrap" }} />)
+      const node = screen.getByTestId("test-node")
+      node.innerHTML = "First plain sentence.\n\nSecond sentence."
+
+      await removeOrShowPageTranslation("bilingual", true)
+
+      expect(vi.mocked(translateTextForPage).mock.calls).toHaveLength(2)
+      expect(
+        vi.mocked(translateTextForPage).mock.calls.every(([request]) => !request.includes("{{")),
+      ).toBe(true)
+    })
+
+    it("leaves translationOnly mode on its HTML path without placeholders", async () => {
+      render(<p data-testid="test-node" />)
+      const node = screen.getByTestId("test-node")
+      node.innerHTML = `Let ${mathml("m1", "x")} be the mean.`
+
+      await removeOrShowPageTranslation("translationOnly", true)
+
+      expect(translateTextForPage).toHaveBeenCalled()
+      const [request, textFormat] = vi.mocked(translateTextForPage).mock.calls[0]!
+      expect(textFormat).toBe("html")
+      expect(request).toContain("<math")
+      expect(request).not.toContain("{{0}}")
+    })
+  })
+
+  describe("arXiv inline code", () => {
+    // LaTeXML markup from https://arxiv.org/html/2609.26891, including the
+    // language class shared by inline identifiers and standalone listings.
+    const inlineCode = (id: string, text = "invoke") =>
+      `<span id="${id}" class="ltx_text ltx_lst_emph ltx_lst_language_Python ltx_lstlisting ltx_font_typewriter" style="--ltx-fg-color:#FF00A6;">${text}</span>`
+
+    beforeEach(() => {
+      vi.mocked(translateTextForPage).mockReset().mockResolvedValue(MOCK_TRANSLATION)
+    })
+
+    afterEach(() => {
+      vi.mocked(translateTextForPage).mockReset().mockResolvedValue(MOCK_TRANSLATION)
+    })
+
+    it.each(["bilingual", "translationOnly"] as const)(
+      "does not translate a code-only paragraph in %s mode",
+      async (mode) => {
+        await withHost(
+          "arxiv.org",
+          async () => {
+            render(<p data-testid="test-node" />)
+            const node = screen.getByTestId("test-node")
+            node.innerHTML = `(${inlineCode("code-only")})`
+            const sourceCode = node.querySelector("span")!
+
+            await removeOrShowPageTranslation(mode, true)
+
+            expect(translateTextForPage).not.toHaveBeenCalled()
+            expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeNull()
+            expect(node.querySelector("span")).toBe(sourceCode)
+            expect(node.textContent).toBe("(invoke)")
+          },
+          "/html/2609.26891",
+        )
+      },
+    )
+
+    it.each(["bilingual", "translationOnly"] as const)(
+      "applies the same prose length filter without counting code in %s mode",
+      async (mode) => {
+        await withHost(
+          "arxiv.org",
+          async () => {
+            const config = structuredClone(DEFAULT_CONFIG)
+            config.pageTranslation.mode = mode
+            config.pageTranslation.page.minCharactersPerNode = 20
+            config.pageTranslation.page.minWordsPerNode = 0
+            render(<p data-testid="test-node" />)
+            const node = screen.getByTestId("test-node")
+            node.innerHTML = `Call ${inlineCode("long-code", "very_long_identifier".repeat(4))}`
+            const sourceCode = node.querySelector("span")!
+
+            await removeOrShowPageTranslation(mode, true, config)
+
+            expect(translateTextForPage).not.toHaveBeenCalled()
+            expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeNull()
+            expect(node.querySelector("span")).toBe(sourceCode)
+          },
+          "/html/2609.26891",
+        )
+      },
+    )
+
+    it.each(["arxiv.org", "ar5iv.labs.arxiv.org"])(
+      "preserves repeated inline identifiers in bilingual translations on %s",
+      async (host) => {
+        await withHost(
+          host,
+          async () => {
+            vi.mocked(translateTextForPage).mockResolvedValue(
+              "核心原语 {{0}} 使用 {{1}} 增强的语言。{{2}} 保留历史。",
+            )
+            render(<p data-testid="test-node" />)
+            const node = screen.getByTestId("test-node")
+            node.innerHTML = `The core primitive ${inlineCode("S1.p2.1.2")} uses an ${inlineCode("S1.p2.1.3")}-augmented language. ${inlineCode("S1.p2.1.5")} preserves history.`
+            const sourceCode = [...node.querySelectorAll("span")]
+
+            await removeOrShowPageTranslation("bilingual", true)
+
+            expect(translateTextForPage).toHaveBeenCalledExactlyOnceWith(
+              "The core primitive {{0}} uses an {{1}}-augmented language. {{2}} preserves history.",
+              "plain",
+              DEFAULT_PAGE_TRANSLATION_OPTIONS,
+            )
+            const wrapper = expectTranslationWrapper(node, "bilingual")!
+            const clones = [...wrapper.querySelectorAll<HTMLElement>(`.${INLINE_ATOM_CLASS}`)]
+            expect(clones).toHaveLength(3)
+            expect(wrapper.textContent).toBe(
+              "核心原语 invoke 使用 invoke 增强的语言。invoke 保留历史。",
+            )
+            expect(
+              clones.every(
+                (clone) =>
+                  clone.textContent === "invoke" &&
+                  clone.classList.contains("ltx_font_typewriter") &&
+                  clone.style.getPropertyValue("--ltx-fg-color") === "#FF00A6" &&
+                  !clone.hasAttribute("id"),
+              ),
+            ).toBe(true)
+            expect(sourceCode.every((code) => code.isConnected && code.hasAttribute("id"))).toBe(
+              true,
+            )
+
+            await removeOrShowPageTranslation("bilingual", true)
+
+            expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeNull()
+            const restoredCode = [...node.querySelectorAll("span")]
+            expect(restoredCode).toHaveLength(sourceCode.length)
+            restoredCode.forEach((code, index) => expect(code).toBe(sourceCode[index]))
+          },
+          "/html/2609.26891",
+        )
+      },
+    )
+
+    it("keeps every identifier when the provider drops or merges placeholders", async () => {
+      await withHost(
+        "arxiv.org",
+        async () => {
+          const names = Array.from({ length: 10 }, (_, index) => `hook${index}`)
+          vi.mocked(translateTextForPage).mockResolvedValue(
+            "运行时将 {{0}}、{{1}}、{{2}}{{3}}、{{4}}、{{5}}、{{6}}、{{8}} 和 {{9}} 作为钩子公开。",
+          )
+          render(<p data-testid="test-node" />)
+          const node = screen.getByTestId("test-node")
+          node.innerHTML = `The runtime exposes ${names.map((name, index) => inlineCode(`S2.p1.1.${index}`, name)).join(", ")} as hooks.`
+
+          await removeOrShowPageTranslation("bilingual", true)
+
+          expect(translateTextForPage).toHaveBeenCalledExactlyOnceWith(
+            `The runtime exposes ${names.map((_, index) => `{{${index}}}`).join(", ")} as hooks.`,
+            "plain",
+            DEFAULT_PAGE_TRANSLATION_OPTIONS,
+          )
+          const wrapper = expectTranslationWrapper(node, "bilingual")!
+          expect(wrapper.querySelectorAll(`.${INLINE_ATOM_CLASS}`)).toHaveLength(10)
+          // Merged tokens still render separately; the dropped {{7}} is
+          // appended after the sentence instead of being lost.
+          expect(wrapper.textContent).toBe(
+            "运行时将 hook0、hook1、hook2hook3、hook4、hook5、hook6、hook8 和 hook9 作为钩子公开。 hook7",
+          )
+        },
+        "/html/2609.26891",
+      )
+    })
+
+    it("marks inline code translate=no in the translationOnly HTML request", async () => {
+      await withHost(
+        "arxiv.org",
+        async () => {
+          // Behaves like an HTML translator: every text node is translated
+          // unless it sits inside a translate="no" element.
+          const translations: Record<string, string> = {
+            "On top of the ": "在 ",
+            invoke: "调用",
+            " primitive, JAZ provides utilities.": " 原语之上，JAZ 提供实用工具。",
+          }
+          vi.mocked(translateTextForPage).mockImplementation(async (html) => {
+            const template = document.createElement("template")
+            template.innerHTML = html
+            const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT)
+            for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+              if (text.parentElement?.closest("[translate='no']")) continue
+              text.textContent = translations[text.textContent ?? ""] ?? text.textContent
+            }
+            return template.innerHTML
+          })
+          render(<p data-testid="test-node" />)
+          const node = screen.getByTestId("test-node")
+          node.innerHTML = `On top of the ${inlineCode("S1.p3.1.1")} primitive, JAZ provides utilities.`
+          const originalHtml = node.innerHTML
+          const sourceCode = node.querySelector("span")!
+          const sourceCodeHtml = sourceCode.outerHTML
+
+          await removeOrShowPageTranslation("translationOnly", true)
+
+          expect(translateTextForPage).toHaveBeenCalledOnce()
+          const [request, textFormat] = vi.mocked(translateTextForPage).mock.calls[0]!
+          expect(textFormat).toBe("html")
+          expect(request).toMatch(/<span class="notranslate" translate="no"[^>]*>invoke<\/span>/)
+          expect(node.textContent).toBe("在 invoke 原语之上，JAZ 提供实用工具。")
+          expect(node.querySelector("span")).toBe(sourceCode)
+          expect(sourceCode.outerHTML).toBe(sourceCodeHtml)
+
+          await removeOrShowPageTranslation("translationOnly", true)
+
+          expect(node.innerHTML).toBe(originalHtml)
+        },
+        "/html/2609.26891",
+      )
+    })
+
+    it.each(["div", "span"])(
+      "keeps a standalone %s code listing beside prose out of the translation",
+      async (tag) => {
+        await withHost(
+          "arxiv.org",
+          async () => {
+            render(<div data-testid="test-node" />)
+            const node = screen.getByTestId("test-node")
+            node.innerHTML = `Call it like this: <${tag} class="ltx_listing ltx_lst_language_Python ltx_lstlisting"><span class="ltx_lst_line">${inlineCode("listing-code")}(task="Use subagents to find papers.")</span></${tag}> and wait.`
+            const listing = node.querySelector(".ltx_listing")!
+            const listingHtml = listing.outerHTML
+
+            await removeOrShowPageTranslation("bilingual", true)
+
+            const requests = vi
+              .mocked(translateTextForPage)
+              .mock.calls.map(([text]) => text)
+              .join("\n")
+            expect(requests).toContain("Call it like this:")
+            expect(requests).not.toMatch(/\{\{\d+\}\}|invoke|subagents/)
+            expect(node.querySelector(`.${INLINE_ATOM_CLASS}`)).toBeNull()
+            expect(listing.outerHTML).toBe(listingHtml)
+          },
+          "/html/2609.26891",
+        )
+      },
+    )
+  })
+
   describe("translationOnly HTML attribute placeholders", () => {
     beforeEach(() => {
       vi.mocked(translateTextForPage).mockReset().mockResolvedValue(MOCK_TRANSLATION)
@@ -2419,7 +3046,7 @@ describe("translate", () => {
       await removeOrShowPageTranslation("translationOnly", true)
 
       expect(translateTextForPage).toHaveBeenCalledOnce()
-      const [requestHtml, textFormat] = vi.mocked(translateTextForPage).mock.calls[0]
+      const [requestHtml, textFormat] = vi.mocked(translateTextForPage).mock.calls[0]!
       expect(textFormat).toBe("html")
       expect(requestHtml).toContain(`<strong title="City" data-rf-attr="0">`)
       expect(requestHtml).not.toContain(longClassName)
@@ -2490,10 +3117,10 @@ describe("translate", () => {
       await removeOrShowPageTranslation("translationOnly", true)
 
       expect(translateTextForPage).toHaveBeenCalledTimes(2)
-      expect(vi.mocked(translateTextForPage).mock.calls[0][0]).toContain(`data-rf-attr="0"`)
-      expect(vi.mocked(translateTextForPage).mock.calls[0][0]).not.toContain(`class="place"`)
-      expect(vi.mocked(translateTextForPage).mock.calls[1][0]).toContain(`class="place"`)
-      expect(vi.mocked(translateTextForPage).mock.calls[1][0]).not.toContain("data-rf-attr")
+      expect(vi.mocked(translateTextForPage).mock.calls[0]![0]).toContain(`data-rf-attr="0"`)
+      expect(vi.mocked(translateTextForPage).mock.calls[0]![0]).not.toContain(`class="place"`)
+      expect(vi.mocked(translateTextForPage).mock.calls[1]![0]).toContain(`class="place"`)
+      expect(vi.mocked(translateTextForPage).mock.calls[1]![0]).not.toContain("data-rf-attr")
       expect(expectTranslationWrapper(node, "translationOnly")?.textContent).toBe(
         "完整 HTML 回退译文",
       )
@@ -2518,7 +3145,9 @@ describe("translate", () => {
       await removeOrShowPageTranslation("translationOnly", true)
 
       expect(translateTextForPage).toHaveBeenCalledTimes(2)
-      expect(vi.mocked(translateTextForPage).mock.calls[1][0]).toContain(`data-rf-attr="rf-page-0"`)
+      expect(vi.mocked(translateTextForPage).mock.calls[1]![0]).toContain(
+        `data-rf-attr="rf-page-0"`,
+      )
       const translatedStrong = expectTranslationWrapper(node, "translationOnly")?.querySelector(
         "strong",
       )
@@ -2559,8 +3188,8 @@ describe("translate", () => {
             baseURL: "https://deeplx.example/translate",
           },
         ],
-        translate: {
-          ...TRANSLATION_ONLY_CONFIG.translate,
+        pageTranslation: {
+          ...TRANSLATION_ONLY_CONFIG.pageTranslation,
           providerId: "deeplx-default",
         },
       }
@@ -2585,10 +3214,10 @@ describe("translate", () => {
       await removeOrShowPageTranslation("translationOnly", true, deeplxConfig)
 
       expect(translateTextForPage).toHaveBeenCalledTimes(3)
-      expect(vi.mocked(translateTextForPage).mock.calls[0][0]).toContain("data-rf-attr")
-      expect(vi.mocked(translateTextForPage).mock.calls[1][0]).not.toContain("data-rf-attr")
-      expect(vi.mocked(translateTextForPage).mock.calls[2][0]).not.toContain("data-rf-attr")
-      expect(vi.mocked(translateTextForPage).mock.calls[2][0]).toContain(`class="place"`)
+      expect(vi.mocked(translateTextForPage).mock.calls[0]![0]).toContain("data-rf-attr")
+      expect(vi.mocked(translateTextForPage).mock.calls[1]![0]).not.toContain("data-rf-attr")
+      expect(vi.mocked(translateTextForPage).mock.calls[2]![0]).not.toContain("data-rf-attr")
+      expect(vi.mocked(translateTextForPage).mock.calls[2]![0]).toContain(`class="place"`)
     })
 
     it("shares the first DeepLX capability probe across concurrent paragraphs", async () => {
@@ -2604,8 +3233,8 @@ describe("translate", () => {
             baseURL: "https://deeplx-concurrent.example/translate",
           },
         ],
-        translate: {
-          ...TRANSLATION_ONLY_CONFIG.translate,
+        pageTranslation: {
+          ...TRANSLATION_ONLY_CONFIG.pageTranslation,
           providerId: "deeplx-concurrent",
         },
       }
@@ -2651,7 +3280,7 @@ describe("translate", () => {
       })
 
       expect(translateTextForPage).toHaveBeenCalledTimes(3)
-      expect(vi.mocked(translateTextForPage).mock.calls[0][0]).toContain("data-rf-attr")
+      expect(vi.mocked(translateTextForPage).mock.calls[0]![0]).toContain("data-rf-attr")
       const fallbackRequests = vi.mocked(translateTextForPage).mock.calls.slice(1)
       expect(fallbackRequests.every(([request]) => !request.includes("data-rf-attr"))).toBe(true)
       expect(fallbackRequests.some(([request]) => request.includes(`class="first-place"`))).toBe(
@@ -2675,8 +3304,8 @@ describe("translate", () => {
             baseURL: "https://deeplx-empty-probe.example/translate",
           },
         ],
-        translate: {
-          ...TRANSLATION_ONLY_CONFIG.translate,
+        pageTranslation: {
+          ...TRANSLATION_ONLY_CONFIG.pageTranslation,
           providerId: "deeplx-empty-probe",
         },
       }
@@ -2793,10 +3422,248 @@ describe("translate", () => {
           await removeOrShowPageTranslation("bilingual", true)
 
           expect(translateTextForPage).toHaveBeenCalledTimes(2)
-          expect(translateTextForPage).toHaveBeenNthCalledWith(1, paragraphs[0], "plain")
-          expect(translateTextForPage).toHaveBeenNthCalledWith(2, paragraphs[1], "plain")
+          expect(translateTextForPage).toHaveBeenNthCalledWith(
+            1,
+            paragraphs[0],
+            "plain",
+            expect.anything(),
+          )
+          expect(translateTextForPage).toHaveBeenNthCalledWith(
+            2,
+            paragraphs[1],
+            "plain",
+            expect.anything(),
+          )
           expect(articleBody.querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)).toHaveLength(2)
         })
+      })
+    })
+
+    describe("plain-text document viewer", () => {
+      // A text/plain URL (nifty.org stories, RFC mirrors, raw logs) reaches the
+      // page as one browser-generated <pre> holding the whole file, with
+      // Chrome's own `white-space: pre-wrap` inline style. It is the only
+      // content such a page has, so the blanket PRE block left it untranslated.
+      const paragraphs = [
+        "Archive header lines describe the collection, the author\ncontact address and the posting date of the chapter.",
+        "The first paragraph of the story is hard wrapped across\nseveral short lines the way a usenet posting would be.",
+        "The closing paragraph of the fixture ends the story here.",
+      ]
+      const storyText = paragraphs.join("\n\n")
+      const translations = ["【存档头译文】", "【第一段译文】", "【结尾段译文】"]
+
+      function renderPlainTextViewer() {
+        Object.defineProperty(document, "contentType", {
+          value: "text/plain",
+          configurable: true,
+        })
+        render(
+          <pre data-testid="viewer" style={{ whiteSpace: "pre-wrap", wordWrap: "break-word" }}>
+            {storyText}
+          </pre>,
+        )
+        return screen.getByTestId("viewer")
+      }
+
+      afterEach(() => {
+        Reflect.deleteProperty(document, "contentType")
+        vi.mocked(translateTextForPage).mockReset().mockResolvedValue(MOCK_TRANSLATION)
+      })
+
+      it("bilingual mode: translates a text/plain page one blank-line paragraph at a time", async () => {
+        const translationByParagraph = new Map(
+          paragraphs.map((paragraph, index) => [paragraph, translations[index]!]),
+        )
+        vi.mocked(translateTextForPage).mockImplementation(async (text) => {
+          const translated = translationByParagraph.get(text)
+          if (!translated) throw new Error(`Unexpected paragraph: ${JSON.stringify(text)}`)
+          return translated
+        })
+
+        const viewer = renderPlainTextViewer()
+        await removeOrShowPageTranslation("bilingual", true)
+
+        // One request per blank-line paragraph, never one request for the file.
+        expect(translateTextForPage).toHaveBeenCalledTimes(paragraphs.length)
+        paragraphs.forEach((paragraph) => {
+          expect(translateTextForPage).toHaveBeenCalledWith(
+            paragraph,
+            "plain",
+            PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+          )
+        })
+
+        const wrappers = [...viewer.querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)]
+        expect(wrappers).toHaveLength(paragraphs.length)
+
+        // Each translation lands directly after its own paragraph, and the
+        // host text is never rewritten.
+        const renderedText = viewer.textContent ?? ""
+        let cursor = -1
+        paragraphs.forEach((paragraph, index) => {
+          const sourceIndex = renderedText.indexOf(paragraph, cursor + 1)
+          expect(sourceIndex, `paragraph ${index + 1} kept intact`).toBeGreaterThan(cursor)
+          const translationIndex = renderedText.indexOf(translations[index]!, sourceIndex)
+          expect(translationIndex, `translation ${index + 1} follows it`).toBeGreaterThan(
+            sourceIndex,
+          )
+          cursor = translationIndex
+        })
+      })
+
+      it("keeps the same page untranslated when it is served as html", async () => {
+        render(
+          <pre data-testid="html-viewer" style={{ whiteSpace: "pre-wrap" }}>
+            {storyText}
+          </pre>,
+        )
+        const viewer = screen.getByTestId("html-viewer")
+
+        await removeOrShowPageTranslation("bilingual", true)
+
+        expect(translateTextForPage).not.toHaveBeenCalled()
+        expect(viewer.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
+        expect(viewer.textContent).toBe(storyText)
+      })
+
+      function mockPerParagraphTranslations() {
+        const translationByParagraph = new Map(
+          paragraphs.map((paragraph, index) => [paragraph, translations[index]!]),
+        )
+        vi.mocked(translateTextForPage).mockImplementation(async (text) => {
+          const translated = translationByParagraph.get(text)
+          if (!translated) throw new Error(`Unexpected paragraph: ${JSON.stringify(text)}`)
+          return translated
+        })
+      }
+
+      it("translation only mode: swaps one blank-line paragraph at a time", async () => {
+        mockPerParagraphTranslations()
+        const viewer = renderPlainTextViewer()
+
+        await removeOrShowPageTranslation("translationOnly", true)
+
+        // One request per paragraph — never the whole file in one payload.
+        expect(translateTextForPage).toHaveBeenCalledTimes(paragraphs.length)
+        expect(viewer.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
+        expect(viewer.textContent).toBe(translations.join("\n\n"))
+        expect(viewer).toHaveAttribute(TRANSLATION_ONLY_ATTRIBUTE)
+      })
+
+      it("translation only mode: keeps the single line breaks inside each paragraph", async () => {
+        // A text/plain guide's banner (`===` / `---[VERSION HISTORY]---` / `===`)
+        // is one paragraph of single-newline lines. The request has to say the
+        // newlines matter, or Google returns the banner as one wrapped line.
+        const lineTranslations = paragraphs.map((paragraph, index) =>
+          paragraph
+            .split("\n")
+            .map((_, line) => `【第${index + 1}段第${line + 1}行】`)
+            .join("\n"),
+        )
+        vi.mocked(translateTextForPage).mockImplementation(async (text) => {
+          const index = paragraphs.indexOf(text)
+          if (index === -1) throw new Error(`Unexpected paragraph: ${JSON.stringify(text)}`)
+          return lineTranslations[index]!
+        })
+        const viewer = renderPlainTextViewer()
+
+        await removeOrShowPageTranslation("translationOnly", true)
+
+        paragraphs.forEach((paragraph) => {
+          expect(translateTextForPage).toHaveBeenCalledWith(
+            paragraph,
+            "html",
+            PRESERVE_LINE_BREAKS_TRANSLATION_OPTIONS,
+          )
+        })
+        expect(viewer.textContent).toBe(lineTranslations.join("\n\n"))
+      })
+
+      it("translation only mode: restores the original single text node on toggle", async () => {
+        mockPerParagraphTranslations()
+        const viewer = renderPlainTextViewer()
+
+        await removeOrShowPageTranslation("translationOnly", true)
+        expect(viewer.childNodes.length).toBeGreaterThan(1)
+
+        await removeOrShowPageTranslation("translationOnly", true)
+
+        // Cuts rejoined: the viewer is one Text node holding the file again.
+        expect(viewer.textContent).toBe(storyText)
+        expect(viewer.childNodes).toHaveLength(1)
+        expect(viewer).not.toHaveAttribute(TRANSLATION_ONLY_ATTRIBUTE)
+      })
+
+      it("translation only mode: toggles off a generation that needed no text cuts", async () => {
+        // Both paragraphs are whole elements, so the units are carved out
+        // without a single splitText. Nothing about the container's own swaps
+        // or split records then records that it was segmented at all — and a
+        // toggle that cannot tell would translate its own output.
+        const elementParagraphs = ["First paragraph.", "Second paragraph."]
+        const elementTranslations = ["【第一段】", "【第二段】"]
+        vi.mocked(translateTextForPage).mockImplementation(async (text) => {
+          const index = elementParagraphs.indexOf(text)
+          if (index === -1) throw new Error(`Unexpected paragraph: ${JSON.stringify(text)}`)
+          return elementTranslations[index]!
+        })
+
+        Object.defineProperty(document, "contentType", {
+          value: "text/plain",
+          configurable: true,
+        })
+        render(
+          <pre data-testid="element-units" style={{ whiteSpace: "pre-wrap" }}>
+            <span>{elementParagraphs[0]}</span>
+            {"\n\n"}
+            <span>{elementParagraphs[1]}</span>
+          </pre>,
+        )
+        const viewer = screen.getByTestId("element-units")
+        const spans = [...viewer.querySelectorAll("span")]
+
+        await removeOrShowPageTranslation("translationOnly", true)
+
+        expect(translateTextForPage).toHaveBeenCalledTimes(2)
+        expect(viewer.textContent).toBe(elementTranslations.join("\n\n"))
+
+        await removeOrShowPageTranslation("translationOnly", true)
+
+        // Back to the source text, with no extra request spent on translating
+        // the translation, and every marker gone.
+        expect(translateTextForPage).toHaveBeenCalledTimes(2)
+        expect(viewer.textContent).toBe(elementParagraphs.join("\n\n"))
+        expect(viewer.querySelectorAll(`[${TRANSLATION_ONLY_ATTRIBUTE}]`)).toHaveLength(0)
+        expect(viewer).not.toHaveAttribute(TRANSLATION_ONLY_ATTRIBUTE)
+        expect(viewer.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
+        expect([...viewer.querySelectorAll("span")]).toEqual(spans)
+      })
+
+      it("translation only mode: leaves no trace when every paragraph echoes its source", async () => {
+        vi.mocked(translateTextForPage).mockImplementation(async (text) => text)
+        const viewer = renderPlainTextViewer()
+
+        await removeOrShowPageTranslation("translationOnly", true)
+
+        expect(viewer.textContent).toBe(storyText)
+        expect(viewer.childNodes).toHaveLength(1)
+        expect(viewer).not.toHaveAttribute(TRANSLATION_ONLY_ATTRIBUTE)
+      })
+
+      it("translation only mode: keeps a failing paragraph from taking the others down", async () => {
+        vi.mocked(translateTextForPage).mockImplementation(async (text) => {
+          if (text === paragraphs[1]) throw new Error("provider exploded")
+          const index = paragraphs.indexOf(text)
+          return translations[index]!
+        })
+        const viewer = renderPlainTextViewer()
+
+        await removeOrShowPageTranslation("translationOnly", true)
+
+        expect(viewer.textContent).toContain(translations[0])
+        expect(viewer.textContent).toContain(translations[2])
+        // The failed unit keeps its own source text and its error UI.
+        expect(viewer.textContent).toContain(paragraphs[1])
+        await waitForTranslationError(viewer)
       })
     })
 
@@ -2837,6 +3704,7 @@ describe("translate", () => {
           expect(translateTextForPage).toHaveBeenCalledWith(
             "perf(main): drop localhost label routes when a worktree is removed by @taiiiyang in #7557",
             "plain",
+            DEFAULT_PAGE_TRANSLATION_OPTIONS,
           )
           expect(document.querySelector(".user-mention")!.hasAttribute(PARAGRAPH_ATTRIBUTE)).toBe(
             false,
@@ -2886,6 +3754,7 @@ describe("translate", () => {
           expect(translateTextForPage).toHaveBeenCalledWith(
             "#1837 feat(translate): return a NO_TRANSLATION_NEEDED sentinel",
             "plain",
+            DEFAULT_PAGE_TRANSLATION_OPTIONS,
           )
           // Preserved as source text, not promoted to its own paragraph/walked node.
           const prLink = document.querySelector("a[data-hovercard-type='pull_request']")!
@@ -3096,8 +3965,8 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[0], [BLOCK_ATTRIBUTE])
-        expectNodeLabels(node.children[1], [BLOCK_ATTRIBUTE])
+        expectNodeLabels(node.children[0]!, [BLOCK_ATTRIBUTE])
+        expectNodeLabels(node.children[1]!, [BLOCK_ATTRIBUTE])
       })
     })
   })
@@ -3157,26 +4026,16 @@ describe("translate", () => {
       await removeOrShowPageTranslation("bilingual", true)
 
       const paragraph = node.children[0]
-      const wrapper = paragraph.childNodes[1] as Element
+      const wrapper = paragraph!.childNodes[1] as Element
       expect(wrapper).toHaveClass(CONTENT_WRAPPER_CLASS)
       expect(wrapper.querySelector("br")).toBeTruthy()
       expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
     })
 
     it("keeps a matching site force-block rule above the short-text heuristic", async () => {
-      const config: Config = {
-        ...BILINGUAL_CONFIG,
-        siteRules: {
-          ...BILINGUAL_CONFIG.siteRules,
-          userRules: [
-            {
-              id: "force-short-label-block",
-              matches: "example.com",
-              forceBlockSelectors: [".force-block"],
-            },
-          ],
-        },
-      }
+      const config = bilingualConfigWithSiteRule({
+        forceBlockStyleSelectors: [".force-block"],
+      })
 
       await withHost("example.com", async () => {
         render(
@@ -3193,6 +4052,344 @@ describe("translate", () => {
         expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
       })
     })
+
+    it("uses block-style without changing an inline traversal label", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceBlockStyleSelectors: [".force-block-style"],
+        forceBlockNodeSelectors: [".node-only-splitter"],
+      })
+
+      await withHost("example.com", async () => {
+        render(
+          <div data-testid="style-run-host">
+            <span className="force-block-style" data-testid="test-node">
+              {MOCK_ORIGINAL_TEXT}
+            </span>
+            <span>{MOCK_ORIGINAL_TEXT}</span>
+            <span className="node-only-splitter" style={{ display: "inline" }}>
+              {MOCK_ORIGINAL_TEXT}
+            </span>
+          </div>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        const peer = node.nextElementSibling!
+        const splitter = peer.nextElementSibling!
+        await removeOrShowPageTranslation("bilingual", true, config)
+
+        expectNodeLabels(node, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(peer, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(splitter, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(screen.getByTestId("style-run-host"), "bilingual")!
+        expect(wrapper.querySelector("br")).toBeTruthy()
+        expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
+      })
+    })
+
+    it("applies block-style when a translated text node's parent matches", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceBlockStyleSelectors: [".force-block-style"],
+      })
+
+      await withHost("example.com", async () => {
+        render(
+          <span className="force-block-style" data-testid="test-node">
+            {MOCK_ORIGINAL_TEXT}
+          </span>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        await translateNodesBilingualMode([node.firstChild!], "text-style-source", config)
+
+        const wrapper = expectTranslationWrapper(node, "bilingual")!
+        expect(wrapper.querySelector("br")).toBeTruthy()
+        expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
+      })
+    })
+
+    it("uses inline-style without changing a block traversal label", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceInlineStyleSelectors: [".force-inline-style"],
+      })
+
+      await withHost("example.com", async () => {
+        render(
+          <div className="force-inline-style" data-testid="test-node">
+            {MOCK_ORIGINAL_TEXT}
+          </div>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        await removeOrShowPageTranslation("bilingual", true, config)
+
+        expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(node, "bilingual")!
+        expect(wrapper.querySelector("br")).toBeFalsy()
+        expect(wrapper.firstChild?.textContent).toBe("\u00A0\u00A0")
+        expectTranslatedContent(wrapper, INLINE_CONTENT_CLASS)
+      })
+    })
+
+    it("keeps inline-style above the grouped force-block insertion heuristic", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceInlineNodeSelectors: [".force-inline-style"],
+        forceInlineStyleSelectors: [".force-inline-style"],
+      })
+
+      await withHost("example.com", async () => {
+        render(
+          <div data-testid="test-node">
+            <div className="force-inline-style">{MOCK_ORIGINAL_TEXT}</div>
+            <div>{MOCK_ORIGINAL_TEXT}</div>
+          </div>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        await removeOrShowPageTranslation("bilingual", true, config)
+
+        const forcedInline = node.children[0]
+        expectNodeLabels(forcedInline!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(forcedInline!, "bilingual")!
+        expect(wrapper.querySelector("br")).toBeFalsy()
+        expectTranslatedContent(wrapper, INLINE_CONTENT_CLASS)
+      })
+    })
+
+    it("gives block-style priority when both style selectors match", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceBlockStyleSelectors: [".style-conflict"],
+        forceInlineStyleSelectors: [".style-conflict"],
+      })
+
+      await withHost("example.com", async () => {
+        render(
+          <div className="style-conflict" data-testid="test-node">
+            {MOCK_ORIGINAL_TEXT}
+          </div>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        await removeOrShowPageTranslation("bilingual", true, config)
+
+        const wrapper = expectTranslationWrapper(node, "bilingual")!
+        expect(wrapper.querySelector("br")).toBeTruthy()
+        expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
+      })
+    })
+
+    it("allows block-node classification with an inline-style wrapper override", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceBlockNodeSelectors: [".cross-axis"],
+        forceInlineStyleSelectors: [".cross-axis"],
+      })
+
+      await withHost("example.com", async () => {
+        render(
+          <div className="cross-axis" data-testid="test-node" style={{ display: "inline" }}>
+            {MOCK_ORIGINAL_TEXT}
+          </div>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        await removeOrShowPageTranslation("bilingual", true, config)
+
+        expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(node, "bilingual")!
+        expectTranslatedContent(wrapper, INLINE_CONTENT_CLASS)
+      })
+    })
+
+    it("allows inline-node classification with a block-style wrapper override", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceInlineNodeSelectors: [".cross-axis"],
+        forceBlockStyleSelectors: [".cross-axis"],
+      })
+
+      await withHost("example.com", async () => {
+        render(
+          <div className="cross-axis" data-testid="test-node">
+            {MOCK_ORIGINAL_TEXT}
+          </div>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        await removeOrShowPageTranslation("bilingual", true, config)
+
+        expectNodeLabels(node, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(node, "bilingual")!
+        expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
+      })
+    })
+
+    it("keeps a block-node-only source on its natural inline wrapper style", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceBlockNodeSelectors: [".node-only"],
+      })
+
+      await withHost("example.com", async () => {
+        render(
+          <div className="node-only" data-testid="test-node" style={{ display: "inline" }}>
+            <span>{MOCK_ORIGINAL_TEXT}</span>
+          </div>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        const sourceChild = node.firstElementChild!
+        await removeOrShowPageTranslation("bilingual", true, config)
+
+        expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(node, "bilingual")!
+        expect(wrapper.parentElement).toBe(node)
+        expect(sourceChild.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
+        expect(wrapper.querySelector("br")).toBeFalsy()
+        expectTranslatedContent(wrapper, INLINE_CONTENT_CLASS)
+      })
+    })
+
+    it("keeps an inline-node-only source on its natural block wrapper style", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceInlineNodeSelectors: [".node-only"],
+      })
+
+      await withHost("example.com", async () => {
+        render(
+          <div className="node-only" data-testid="test-node" style={{ display: "block" }}>
+            {MOCK_ORIGINAL_TEXT}
+          </div>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        await removeOrShowPageTranslation("bilingual", true, config)
+
+        expectNodeLabels(node, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(node, "bilingual")!
+        expect(wrapper.querySelector("br")).toBeTruthy()
+        expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
+      })
+    })
+
+    it("lets a block-node-only child split runs without forcing their wrapper styles", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceBlockNodeSelectors: [".node-only"],
+      })
+
+      await withHost("example.com", async () => {
+        render(
+          <div data-testid="test-node">
+            <div className="node-only" style={{ display: "inline" }}>
+              {MOCK_ORIGINAL_TEXT}
+            </div>
+            <div style={{ display: "inline" }}>{MOCK_ORIGINAL_TEXT}</div>
+          </div>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        const forcedBlock = node.children[0]
+        const remainingInlineRun = node.children[1]
+        await removeOrShowPageTranslation("bilingual", true, config)
+
+        expectNodeLabels(forcedBlock!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(remainingInlineRun!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        for (const source of [forcedBlock, remainingInlineRun]) {
+          const wrapper = expectTranslationWrapper(source!, "bilingual")!
+          expect(wrapper.querySelector("br")).toBeFalsy()
+          expectTranslatedContent(wrapper, INLINE_CONTENT_CLASS)
+        }
+      })
+    })
+
+    it("preserves legacy group layout when block node and style selectors are combined", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceBlockNodeSelectors: [".legacy-block"],
+        forceBlockStyleSelectors: [".legacy-block"],
+      })
+
+      await withHost("example.com", async () => {
+        render(
+          <div data-testid="test-node">
+            <div className="legacy-block" style={{ display: "inline" }}>
+              {MOCK_ORIGINAL_TEXT}
+            </div>
+            <div style={{ display: "inline" }}>{MOCK_ORIGINAL_TEXT}</div>
+          </div>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        const forcedBlock = node.children[0]
+        const remainingInlineRun = node.children[1]
+        await removeOrShowPageTranslation("bilingual", true, config)
+
+        expectNodeLabels(forcedBlock!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        expectNodeLabels(remainingInlineRun!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        for (const source of [forcedBlock, remainingInlineRun]) {
+          const wrapper = expectTranslationWrapper(source!, "bilingual")!
+          expect(wrapper.querySelector("br")).toBeTruthy()
+          expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
+        }
+      })
+    })
+
+    it("preserves legacy nested wrapper placement when block axes are combined", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceBlockNodeSelectors: [".legacy-block"],
+        forceBlockStyleSelectors: [".legacy-block"],
+      })
+
+      await withHost("example.com", async () => {
+        render(
+          <span className="legacy-block" data-testid="test-node" style={{ display: "inline" }}>
+            <em>{MOCK_ORIGINAL_TEXT}</em>
+          </span>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        const sourceChild = node.firstElementChild!
+        await removeOrShowPageTranslation("bilingual", true, config)
+
+        expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrapper = expectTranslationWrapper(node, "bilingual")!
+        expect(wrapper.parentElement).toBe(sourceChild)
+        expect(wrapper.querySelector("br")).toBeTruthy()
+        expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
+      })
+    })
+
+    it("keeps virtual paragraphs inline when only their node classification is forced block", async () => {
+      const config = bilingualConfigWithSiteRule({
+        forceBlockNodeSelectors: [".node-only"],
+      })
+      const paragraphs = [
+        "First deliberately long virtual paragraph source.",
+        "Second deliberately long virtual paragraph source.",
+      ]
+      const translations = ["【第一段译文】", "【第二段译文】"]
+      vi.mocked(translateTextForPage)
+        .mockResolvedValueOnce(translations[0]!)
+        .mockResolvedValueOnce(translations[1]!)
+
+      await withHost("example.com", async () => {
+        render(
+          <div
+            className="node-only"
+            data-testid="test-node"
+            style={{ display: "inline", whiteSpace: "pre-wrap" }}
+          >
+            <span>{paragraphs.join("\n\n")}</span>
+          </div>,
+        )
+
+        const node = screen.getByTestId("test-node")
+        await removeOrShowPageTranslation("bilingual", true, config)
+
+        expectNodeLabels(node, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+        const wrappers = node.querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)
+        expect(wrappers).toHaveLength(2)
+        wrappers.forEach((wrapper, index) => {
+          expect(wrapper.querySelector("br")).toBeFalsy()
+          expectTranslatedContent(wrapper, INLINE_CONTENT_CLASS, translations[index])
+        })
+      })
+    })
   })
   describe("flex parent", () => {
     it("flex parent: should force the translation style to be inline", async () => {
@@ -3205,9 +4402,9 @@ describe("translate", () => {
       await removeOrShowPageTranslation("bilingual", true)
 
       expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-      expectNodeLabels(node.children[0], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-      const wrapper = expectTranslationWrapper(node.children[0], "bilingual")
-      expect(wrapper).toBe(node.children[0].lastChild)
+      expectNodeLabels(node.children[0]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+      const wrapper = expectTranslationWrapper(node.children[0]!, "bilingual")
+      expect(wrapper).toBe(node.children[0]!.lastChild)
       expectTranslatedContent(wrapper, INLINE_CONTENT_CLASS)
 
       await removeOrShowPageTranslation("bilingual", true)
@@ -3228,18 +4425,18 @@ describe("translate", () => {
       await removeOrShowPageTranslation("bilingual", true)
 
       expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-      expectNodeLabels(node.children[0], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+      expectNodeLabels(node.children[0]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
       // First inline group wrapper (text node before block div)
-      const wrapper1 = node.children[0].childNodes[1]
+      const wrapper1 = node.children[0]!.childNodes[1]
       expect(wrapper1).toHaveClass(CONTENT_WRAPPER_CLASS)
       expectTranslatedContent(wrapper1 as Element, INLINE_CONTENT_CLASS)
       // Block child should have its own wrapper
-      expectNodeLabels(node.children[0].children[1], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-      const wrapper2 = expectTranslationWrapper(node.children[0].children[1], "bilingual")
-      expect(wrapper2).toBe(node.children[0].children[1].lastChild)
+      expectNodeLabels(node.children[0]!.children[1]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+      const wrapper2 = expectTranslationWrapper(node.children[0]!.children[1]!, "bilingual")
+      expect(wrapper2).toBe(node.children[0]!.children[1]!.lastChild)
       expectTranslatedContent(wrapper2, BLOCK_CONTENT_CLASS)
       // Second inline group wrapper (text node after block div)
-      const wrapper3 = node.children[0].lastChild
+      const wrapper3 = node.children[0]!.lastChild
       expect(wrapper3).toHaveClass(CONTENT_WRAPPER_CLASS)
       expectTranslatedContent(wrapper3 as Element, INLINE_CONTENT_CLASS)
 
@@ -3263,12 +4460,12 @@ describe("translate", () => {
       await removeOrShowPageTranslation("bilingual", true)
 
       expectNodeLabels(node, [BLOCK_ATTRIBUTE])
-      expectNodeLabels(node.children[0], [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-      expectNodeLabels(node.children[0].children[0], [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
-      const wrapper = expectTranslationWrapper(node.children[0], "bilingual")
-      expect(wrapper).toBe(node.children[0].lastChild)
+      expectNodeLabels(node.children[0]!, [INLINE_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+      expectNodeLabels(node.children[0]!.children[0]!, [BLOCK_ATTRIBUTE, PARAGRAPH_ATTRIBUTE])
+      const wrapper = expectTranslationWrapper(node.children[0]!, "bilingual")
+      expect(wrapper).toBe(node.children[0]!.lastChild)
       expectTranslatedContent(wrapper, BLOCK_CONTENT_CLASS)
-      expect(node.children[0].querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)).toHaveLength(1)
+      expect(node.children[0]!.querySelectorAll(`.${CONTENT_WRAPPER_CLASS}`)).toHaveLength(1)
 
       await removeOrShowPageTranslation("bilingual", true)
       expect(node.querySelector(`.${CONTENT_WRAPPER_CLASS}`)).toBeFalsy()
@@ -3297,6 +4494,7 @@ describe("translate", () => {
         expect(translateTextForPage).toHaveBeenCalledWith(
           `${MOCK_ORIGINAL_TEXT} ${MOCK_ORIGINAL_TEXT}`,
           "plain",
+          DEFAULT_PAGE_TRANSLATION_OPTIONS,
         )
       })
     })
@@ -3315,6 +4513,7 @@ describe("translate", () => {
         expect(translateTextForPage).toHaveBeenCalledWith(
           `${MOCK_ORIGINAL_TEXT} ${MOCK_ORIGINAL_TEXT}`,
           "plain",
+          DEFAULT_PAGE_TRANSLATION_OPTIONS,
         )
       })
     })
@@ -3327,7 +4526,11 @@ describe("translate", () => {
         render(<div data-testid="test-node">{`\n${MOCK_ORIGINAL_TEXT} \n`}</div>)
         await removeOrShowPageTranslation("bilingual", true)
 
-        expect(translateTextForPage).toHaveBeenCalledWith(MOCK_ORIGINAL_TEXT, "plain")
+        expect(translateTextForPage).toHaveBeenCalledWith(
+          MOCK_ORIGINAL_TEXT,
+          "plain",
+          DEFAULT_PAGE_TRANSLATION_OPTIONS,
+        )
       })
 
       it("bilingual mode: space leading/trailing is trimmed before translation", async () => {
@@ -3337,7 +4540,11 @@ describe("translate", () => {
         await removeOrShowPageTranslation("bilingual", true)
 
         // Final text is trimmed before translation
-        expect(translateTextForPage).toHaveBeenCalledWith(MOCK_ORIGINAL_TEXT, "plain")
+        expect(translateTextForPage).toHaveBeenCalledWith(
+          MOCK_ORIGINAL_TEXT,
+          "plain",
+          DEFAULT_PAGE_TRANSLATION_OPTIONS,
+        )
       })
     })
 
@@ -3357,6 +4564,7 @@ describe("translate", () => {
         expect(translateTextForPage).toHaveBeenCalledWith(
           `${MOCK_ORIGINAL_TEXT} ${MOCK_ORIGINAL_TEXT}`,
           "plain",
+          DEFAULT_PAGE_TRANSLATION_OPTIONS,
         )
       })
 
@@ -3373,6 +4581,7 @@ describe("translate", () => {
         expect(translateTextForPage).toHaveBeenCalledWith(
           `${MOCK_ORIGINAL_TEXT} ${MOCK_ORIGINAL_TEXT}`,
           "plain",
+          DEFAULT_PAGE_TRANSLATION_OPTIONS,
         )
       })
     })
@@ -3391,8 +4600,18 @@ describe("translate", () => {
 
         // BR elements are handled as paragraph separators, each paragraph translated separately
         expect(translateTextForPage).toHaveBeenCalledTimes(2)
-        expect(translateTextForPage).toHaveBeenNthCalledWith(1, MOCK_ORIGINAL_TEXT, "plain")
-        expect(translateTextForPage).toHaveBeenNthCalledWith(2, MOCK_ORIGINAL_TEXT, "plain")
+        expect(translateTextForPage).toHaveBeenNthCalledWith(
+          1,
+          MOCK_ORIGINAL_TEXT,
+          "plain",
+          DEFAULT_PAGE_TRANSLATION_OPTIONS,
+        )
+        expect(translateTextForPage).toHaveBeenNthCalledWith(
+          2,
+          MOCK_ORIGINAL_TEXT,
+          "plain",
+          DEFAULT_PAGE_TRANSLATION_OPTIONS,
+        )
       })
 
       it("translationOnly mode: should handle BR elements as paragraph separators", async () => {
@@ -3407,8 +4626,18 @@ describe("translate", () => {
         await removeOrShowPageTranslation("translationOnly", true)
 
         expect(translateTextForPage).toHaveBeenCalledTimes(2)
-        expect(translateTextForPage).toHaveBeenNthCalledWith(1, MOCK_ORIGINAL_TEXT, "html")
-        expect(translateTextForPage).toHaveBeenNthCalledWith(2, MOCK_ORIGINAL_TEXT, "html")
+        expect(translateTextForPage).toHaveBeenNthCalledWith(
+          1,
+          MOCK_ORIGINAL_TEXT,
+          "html",
+          DEFAULT_PAGE_TRANSLATION_OPTIONS,
+        )
+        expect(translateTextForPage).toHaveBeenNthCalledWith(
+          2,
+          MOCK_ORIGINAL_TEXT,
+          "html",
+          DEFAULT_PAGE_TRANSLATION_OPTIONS,
+        )
       })
     })
   })
@@ -3419,11 +4648,11 @@ describe("translate", () => {
 
     const MIN_CHARS_CONFIG: Config = {
       ...DEFAULT_CONFIG,
-      translate: {
-        ...DEFAULT_CONFIG.translate,
+      pageTranslation: {
+        ...DEFAULT_CONFIG.pageTranslation,
         mode: "bilingual" as const,
         page: {
-          ...DEFAULT_CONFIG.translate.page,
+          ...DEFAULT_CONFIG.pageTranslation.page,
           minCharactersPerNode: 10,
           minWordsPerNode: 0,
         },
@@ -3432,11 +4661,11 @@ describe("translate", () => {
 
     const MIN_WORDS_CONFIG: Config = {
       ...DEFAULT_CONFIG,
-      translate: {
-        ...DEFAULT_CONFIG.translate,
+      pageTranslation: {
+        ...DEFAULT_CONFIG.pageTranslation,
         mode: "bilingual" as const,
         page: {
-          ...DEFAULT_CONFIG.translate.page,
+          ...DEFAULT_CONFIG.pageTranslation.page,
           minCharactersPerNode: 0,
           minWordsPerNode: 5,
         },

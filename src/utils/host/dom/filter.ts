@@ -1,5 +1,6 @@
 import type { Config } from "@/types/config/config"
 import type { TransNode } from "@/types/dom"
+import type { TagSetFamily } from "@/utils/constants/dom-rules"
 import {
   BLOCK_ATTRIBUTE,
   BLOCK_CONTENT_CLASS,
@@ -8,13 +9,29 @@ import {
   INLINE_CONTENT_CLASS,
   NOTRANSLATE_CLASS,
 } from "@/utils/constants/dom-labels"
-import {
-  DONT_WALK_AND_TRANSLATE_TAGS,
-  DONT_WALK_BUT_TRANSLATE_TAGS,
-  FORCE_BLOCK_TAGS,
-  MAIN_CONTENT_IGNORE_TAGS,
-} from "@/utils/constants/dom-rules"
-import { getEffectiveSiteRule } from "@/utils/site-rules/effective"
+import { DEFAULT_TAG_SETS } from "@/utils/constants/dom-rules"
+import { getDocumentSiteRule } from "@/utils/site-rules/effective"
+
+const ICON_FONT_FAMILY_NAMES = ["material icons", "material symbols", "font awesome"]
+
+// Ligature icon fonts store glyph names such as `keyboard_return` in text nodes.
+// Translating those names breaks the glyph lookup and exposes the translated text.
+function usesIconFont(fontFamily: string): boolean {
+  // Only the primary family indicates how the element is intended to render;
+  // an icon font appearing later as a fallback is not enough to exclude real text.
+  const [primaryFamily = ""] = fontFamily.split(",")
+  const normalizedFamily = primaryFamily
+    .trim()
+    .replace(/^(["'])(.*)\1$/, "$2")
+    .toLowerCase()
+  return (
+    normalizedFamily === "google symbols" ||
+    normalizedFamily === "fontawesome" ||
+    ICON_FONT_FAMILY_NAMES.some(
+      (name) => normalizedFamily === name || normalizedFamily.startsWith(`${name} `),
+    )
+  )
+}
 
 export function isEditable(element: HTMLElement): boolean {
   const tag = element.tagName
@@ -25,23 +42,26 @@ export function isEditable(element: HTMLElement): boolean {
 
 // shallow means only check the node itself, not the children
 // if a shallow inline node has children are block node, then it's block node rather than inline node
-export function isShallowInlineTransNode(node: Node): boolean {
+export function isShallowInlineTransNode(node: Node, config?: Config): boolean {
   if (isTextNode(node) && node.textContent?.trim()) {
     return true
   } else if (isHTMLElement(node)) {
-    return isShallowInlineHTMLElement(node)
+    return isShallowInlineHTMLElement(node, undefined, config)
   }
   return false
 }
 
 // treat large floating letter on some news websites as inline node
 // for example: https://www.economist.com/business/2025/08/21/china-is-quietly-upstaging-america-with-its-open-models
-function isLargeInitialFloatingLetter(element: HTMLElement): boolean {
-  const computedStyle = window.getComputedStyle(element)
+function isLargeInitialFloatingLetter(
+  element: HTMLElement,
+  computedStyle: CSSStyleDeclaration = window.getComputedStyle(element),
+  config?: Config,
+): boolean {
   return (
     computedStyle.float === "left" &&
     !!element.nextSibling &&
-    isShallowInlineTransNode(element.nextSibling)
+    isShallowInlineTransNode(element.nextSibling, config)
   )
 }
 
@@ -61,51 +81,75 @@ function isInlineDisplay(display: string): boolean {
   )
 }
 
-export function isShallowInlineHTMLElement(element: HTMLElement): boolean {
+export function isShallowInlineHTMLElement(
+  element: HTMLElement,
+  computedStyle?: CSSStyleDeclaration,
+  config?: Config,
+): boolean {
   // to prevent too many inline nodes that make <body> as a paragraph node
   if (!element.textContent?.trim()) {
     return false
   }
 
-  if (FORCE_BLOCK_TAGS.has(element.tagName)) {
+  if (getEffectiveTagSet(config, "forceBlockTags").has(element.tagName)) {
     return false
   }
 
-  const computedStyle = window.getComputedStyle(element)
+  const style = computedStyle ?? window.getComputedStyle(element)
 
-  if (isLargeInitialFloatingLetter(element)) {
+  if (isLargeInitialFloatingLetter(element, style, config)) {
     return true
   }
 
-  return isInlineDisplay(computedStyle.display)
+  return isInlineDisplay(style.display)
 }
 
 // Note: !(inline node) != block node because of `notranslate` class and all cases not in the if else block
-export function isShallowBlockTransNode(node: Node): boolean {
+export function isShallowBlockTransNode(node: Node, config?: Config): boolean {
   if (isTextNode(node)) {
     return false
   } else if (isHTMLElement(node)) {
-    return isShallowBlockHTMLElement(node)
+    return isShallowBlockHTMLElement(node, undefined, config)
   }
   return false
 }
 
-export function isShallowBlockHTMLElement(element: HTMLElement): boolean {
-  const computedStyle = window.getComputedStyle(element)
-
-  if (FORCE_BLOCK_TAGS.has(element.tagName)) {
+export function isShallowBlockHTMLElement(
+  element: HTMLElement,
+  computedStyle?: CSSStyleDeclaration,
+  config?: Config,
+): boolean {
+  if (getEffectiveTagSet(config, "forceBlockTags").has(element.tagName)) {
     return true
   }
 
-  if (isLargeInitialFloatingLetter(element)) {
+  const style = computedStyle ?? window.getComputedStyle(element)
+
+  if (isLargeInitialFloatingLetter(element, style, config)) {
     return false
   }
 
-  return !isInlineDisplay(computedStyle.display)
+  return !isInlineDisplay(style.display)
+}
+
+/**
+ * The effective tag set for one family: the site-rule override when a matched
+ * rule touched it, the shipped constant otherwise. `config` is optional so
+ * callers without one (tests, defensive paths) degrade to the defaults instead
+ * of crashing — all production callers pass it.
+ */
+export function getEffectiveTagSet(
+  config: Config | undefined,
+  family: TagSetFamily,
+): ReadonlySet<string> {
+  if (config === undefined) {
+    return DEFAULT_TAG_SETS[family]
+  }
+  return getDocumentSiteRule(config)[family] ?? DEFAULT_TAG_SETS[family]
 }
 
 export function isSiteRuleExcludedElement(element: HTMLElement, config: Config): boolean {
-  const { excludeSelector, includeSelector } = getEffectiveSiteRule(config, window.location.href)
+  const { excludeSelector, includeSelector } = getDocumentSiteRule(config)
   if (excludeSelector === null || !element.matches(excludeSelector)) {
     return false
   }
@@ -123,19 +167,47 @@ export function isSiteRuleExcludedElement(element: HTMLElement, config: Config):
   return true
 }
 
-export function isSiteRuleForceBlockElement(element: HTMLElement, config: Config): boolean {
-  const { forceBlockSelector } = getEffectiveSiteRule(config, window.location.href)
-  return forceBlockSelector !== null && element.matches(forceBlockSelector)
+export function isSiteRuleForceBlockNodeElement(element: HTMLElement, config: Config): boolean {
+  const { forceBlockNodeSelector } = getDocumentSiteRule(config)
+  return forceBlockNodeSelector !== null && element.matches(forceBlockNodeSelector)
 }
 
-export function isSiteRuleForceInlineElement(element: HTMLElement, config: Config): boolean {
-  const { forceInlineSelector } = getEffectiveSiteRule(config, window.location.href)
-  return forceInlineSelector !== null && element.matches(forceInlineSelector)
+export function isSiteRuleForceBlockStyleElement(element: HTMLElement, config: Config): boolean {
+  const { forceBlockStyleSelector } = getDocumentSiteRule(config)
+  return forceBlockStyleSelector !== null && element.matches(forceBlockStyleSelector)
+}
+
+export function isSiteRuleForceInlineNodeElement(element: HTMLElement, config: Config): boolean {
+  const { forceInlineNodeSelector } = getDocumentSiteRule(config)
+  return forceInlineNodeSelector !== null && element.matches(forceInlineNodeSelector)
+}
+
+export function isSiteRuleForceInlineStyleElement(element: HTMLElement, config: Config): boolean {
+  const { forceInlineStyleSelector } = getDocumentSiteRule(config)
+  return forceInlineStyleSelector !== null && element.matches(forceInlineStyleSelector)
 }
 
 export function isSiteRulePreserveTextElement(element: HTMLElement, config: Config): boolean {
-  const { preserveTextSelector } = getEffectiveSiteRule(config, window.location.href)
+  const { preserveTextSelector } = getDocumentSiteRule(config)
   return preserveTextSelector !== null && element.matches(preserveTextSelector)
+}
+
+export function isSiteRuleAtomElement(element: HTMLElement, config: Config): boolean {
+  const { atomSelector } = getDocumentSiteRule(config)
+  return atomSelector !== null && element.matches(atomSelector)
+}
+
+/**
+ * An inline atom is a rendered formula whose subtree is opaque to translation:
+ * bilingual mode sends a placeholder instead of its text and clones the
+ * element back into the translation. Native MathML roots are atoms by tag
+ * (MathML keeps lowercase local names inside an HTML document); everything
+ * else comes from the `atomSelectors` site-rule family. Atoms are already
+ * walk-blocked because the resolver folds atom selectors into
+ * `preserveTextSelector`, so this predicate is only consulted by extraction.
+ */
+export function isInlineAtomElement(element: HTMLElement, config: Config): boolean {
+  return element.localName === "math" || isSiteRuleAtomElement(element, config)
 }
 
 /**
@@ -148,31 +220,29 @@ export function isSiteRulePreserveTextElement(element: HTMLElement, config: Conf
  * still carve holes inside included regions.
  */
 export function isWithinIncludeScope(element: HTMLElement, config: Config): boolean {
-  const { includeSelector } = getEffectiveSiteRule(config, window.location.href)
+  const { includeSelector } = getDocumentSiteRule(config)
   return includeSelector === null || element.closest(includeSelector) !== null
-}
-
-/**
- * <pre> is skipped by default because it usually contains source code. A few
- * sites use it for prose instead, so an exact site-rule include can opt that
- * specific element back into translation without reopening other unsafe tags.
- */
-function isExplicitlyIncludedPreElement(element: HTMLElement, config: Config): boolean {
-  if (element.tagName !== "PRE") {
-    return false
-  }
-
-  const { includeSelector } = getEffectiveSiteRule(config, window.location.href)
-  return includeSelector !== null && element.matches(includeSelector)
 }
 
 export function isDontWalkIntoButTranslateAsChildElement(
   element: HTMLElement,
   config?: Config,
 ): boolean {
-  const dontWalkClass = element.classList.contains(NOTRANSLATE_CLASS)
+  // The document shell is exempt from the `notranslate` class rule. This
+  // predicate means "don't descend, but let the parent translate this as one
+  // inline chunk" — neither <html> nor <body> has a translatable parent to fold
+  // that text into, so blocking either one drops the whole document instead of
+  // merging it. Telegram Web A ships `<html class="notranslate">`, while EdStem
+  // and Featurebase ship `<body class="notranslate">`. Honoring an explicit
+  // page-translation request over a page-shell opt-out mirrors the existing
+  // decision to ignore the `translate="no"` attribute (#459). Nested
+  // `notranslate` elements — read frog's own injected UI included — still block
+  // normally.
+  const isDocumentShell =
+    element === element.ownerDocument.documentElement || element === element.ownerDocument.body
+  const dontWalkClass = element.classList.contains(NOTRANSLATE_CLASS) && !isDocumentShell
 
-  const dontWalkTag = DONT_WALK_BUT_TRANSLATE_TAGS.has(element.tagName)
+  const dontWalkTag = getEffectiveTagSet(config, "dontWalkButTranslateTags").has(element.tagName)
 
   const dontWalkPreserveText =
     config !== undefined && isSiteRulePreserveTextElement(element, config)
@@ -199,36 +269,83 @@ export function isDontWalkIntoAndDontTranslateAsChildElement(
   element: HTMLElement,
   config: Config,
 ): boolean {
-  const dontWalkCustomElement =
-    !isDontWalkIntoButTranslateAsChildElement(element, config) &&
-    isSiteRuleExcludedElement(element, config)
-  const dontWalkContent =
-    config.translate.page.range !== "all" &&
-    MAIN_CONTENT_IGNORE_TAGS.has(element.tagName) &&
-    !isInsideContentContainer(element)
-  const dontWalkInvalidTag =
-    DONT_WALK_AND_TRANSLATE_TAGS.has(element.tagName) &&
-    !isExplicitlyIncludedPreElement(element, config)
-  const dontWalkCSS =
-    window.getComputedStyle(element).display === "none" ||
-    window.getComputedStyle(element).visibility === "hidden"
-  const dontWalkHidden = element.hidden
+  // Cheap structural predicates first; the getComputedStyle check runs last
+  // because it can force a style recalculation, and the full-page walk
+  // evaluates this predicate for every element (#1881).
+  //
+  // PRE is in the default set because an authored <pre> holds code, logs or
+  // ASCII art. The browser's own <pre> around a .txt or .md file is let through
+  // by the built-in `readfrog-plain-text-document` rule, which matches on
+  // document type rather than site, so site and user rules can still override it.
+  const dontWalkInvalidTag = getEffectiveTagSet(config, "dontWalkTags").has(element.tagName)
+  if (dontWalkInvalidTag) return true
+
+  // The `hidden` attribute hides only through the UA stylesheet's
+  // `display: none`, so the computed-style check below decides it: author CSS
+  // can show a `hidden` element, as science.nasa.gov does with a
+  // `<div hidden>` set to `display: block` that holds its secondary nav
+  // (#1474). `hidden="until-found"` hides through `content-visibility` instead,
+  // which that check does not read; the browser drops the attribute when it
+  // reveals the content, and the attribute mutation re-walks it then.
+  const dontWalkUntilFound = element.getAttribute("hidden")?.toLowerCase() === "until-found"
+  if (dontWalkUntilFound) return true
+
   const dontWalkVisuallyHidden = ["sr-only", "visually-hidden"].some((cls) =>
     element.classList.contains(cls),
   )
+  if (dontWalkVisuallyHidden) return true
 
-  if (
-    dontWalkCustomElement ||
-    dontWalkContent ||
-    dontWalkInvalidTag ||
-    dontWalkCSS ||
-    dontWalkHidden ||
-    dontWalkVisuallyHidden
-  ) {
-    return true
-  }
+  const dontWalkContent =
+    config.pageTranslation.page.range !== "all" &&
+    getEffectiveTagSet(config, "mainContentIgnoreTags").has(element.tagName) &&
+    !isInsideContentContainer(element)
+  if (dontWalkContent) return true
 
-  return false
+  const dontWalkCustomElement =
+    !isDontWalkIntoButTranslateAsChildElement(element, config) &&
+    isSiteRuleExcludedElement(element, config)
+  if (dontWalkCustomElement) return true
+
+  const computedStyle = window.getComputedStyle(element)
+  if (usesIconFont(computedStyle.fontFamily)) return true
+  const hidden = computedStyle.display === "none" || computedStyle.visibility === "hidden"
+  return hidden && !isSiteRuleWalkHiddenElement(element, computedStyle, config)
+}
+
+/**
+ * Whether a site rule asks the walk to enter `element` although its computed
+ * style hides it (`walkHiddenSelectors`). The matched element is entered
+ * whatever hides it. Below it, only `visibility: hidden` inherited from that
+ * region is waived: a descendant the site hides on its own (a mobile-only back
+ * button inside a desktop menu) stays out of the walk and of the translated
+ * text.
+ */
+function isSiteRuleWalkHiddenElement(
+  element: HTMLElement,
+  computedStyle: CSSStyleDeclaration,
+  config: Config,
+): boolean {
+  const { walkHiddenSelector } = getDocumentSiteRule(config)
+  if (walkHiddenSelector === null) return false
+  if (element.matches(walkHiddenSelector)) return true
+  if (computedStyle.display === "none") return false
+  const parent = element.parentElement
+  return (
+    parent !== null &&
+    window.getComputedStyle(parent).visibility === "hidden" &&
+    parent.closest(walkHiddenSelector) !== null
+  )
+}
+
+/**
+ * The walk-blocking predicate shared by the traversal (which stops descent at
+ * such elements) and the mutation pipeline's walkability cache.
+ */
+export function isWalkBlockedElement(element: HTMLElement, config: Config): boolean {
+  return (
+    isDontWalkIntoButTranslateAsChildElement(element, config) ||
+    isDontWalkIntoAndDontTranslateAsChildElement(element, config)
+  )
 }
 
 export function isInlineTransNode(node: TransNode): boolean {
@@ -243,6 +360,36 @@ export function isBlockTransNode(node: TransNode): boolean {
     return false
   }
   return node.hasAttribute(BLOCK_ATTRIBUTE)
+}
+
+type NaturalTransNodeKind = "block" | "inline" | "none"
+
+// Traversal labels are the effective node classification after site-rule
+// overrides. Keep the pre-override classification separately so translation
+// wrapper layout never reads a Node-only override as a Style instruction.
+// WeakMap avoids exposing another marker attribute to host-page CSS and
+// mutation observers. Marker-only fallback covers retry/tests whose labels
+// predate this module state (for example, an extension reload on a live tab).
+const naturalTransNodeKinds = new WeakMap<HTMLElement, NaturalTransNodeKind>()
+
+export function setNaturalTransNodeKind(element: HTMLElement, kind: NaturalTransNodeKind): void {
+  naturalTransNodeKinds.set(element, kind)
+}
+
+export function isNaturalInlineTransNode(node: TransNode): boolean {
+  if (isTextNode(node)) {
+    return true
+  }
+  const kind = naturalTransNodeKinds.get(node)
+  return kind === undefined ? isInlineTransNode(node) : kind === "inline"
+}
+
+export function isNaturalBlockTransNode(node: TransNode): boolean {
+  if (isTextNode(node)) {
+    return false
+  }
+  const kind = naturalTransNodeKinds.get(node)
+  return kind === undefined ? isBlockTransNode(node) : kind === "block"
 }
 
 /**
@@ -303,10 +450,7 @@ export function isTranslatedContentNode(node: Node): boolean {
 export function hasNoWalkAncestor(element: HTMLElement, config: Config): boolean {
   let current: HTMLElement | null = element.parentElement
   while (current) {
-    if (
-      isDontWalkIntoButTranslateAsChildElement(current, config) ||
-      isDontWalkIntoAndDontTranslateAsChildElement(current, config)
-    ) {
+    if (isWalkBlockedElement(current, config)) {
       return true
     }
     current = current.parentElement

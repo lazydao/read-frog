@@ -1,75 +1,113 @@
 import type { Config } from "@/types/config/config"
 import type { TranslationNodeStyleConfig } from "@/types/config/translate"
 import type { TransNode } from "@/types/dom"
+import { getDocumentSiteRule } from "@/utils/site-rules/effective"
 import {
   BLOCK_CONTENT_CLASS,
   FLOAT_WRAP_ATTRIBUTE,
   INLINE_CONTENT_CLASS,
   NOTRANSLATE_CLASS,
-  PARAGRAPH_ATTRIBUTE,
 } from "../../../constants/dom-labels"
-import {
-  isBlockTransNode,
-  isHTMLElement,
-  isInlineTransNode,
-  isSiteRuleForceBlockElement,
-  isSiteRuleForceInlineElement,
-} from "../../dom/filter"
+import { isHTMLElement, isNaturalBlockTransNode, isNaturalInlineTransNode } from "../../dom/filter"
 import { getOwnerDocument } from "../../dom/node"
 import { decorateTranslationNode } from "../ui/decorate-translation"
 import { isForceInlineTranslation, isShortInlineTranslationText } from "../ui/translation-utils"
 
 interface TranslationInsertionContext {
-  flowSource: TransNode
   layoutSource: TransNode
+  /** Nodes whose source text is represented by this wrapper. */
+  styleSources?: readonly TransNode[]
   sourceText: string
   isCurrent?: () => boolean
+  // Fired synchronously right after the translated node is appended, BEFORE
+  // the decorate await. This is the only sound point to snapshot the wrapper's
+  // expected content (#1918): earlier and the isCurrent() entry guard would
+  // see a mismatch and self-destruct the translation; later (after the await)
+  // and a site rewrite landing in the await window would be canonized as the
+  // expected content. Not fired on the no-append early return, so stray empty
+  // wrappers never enter tamper surveillance.
+  onContentInserted?: (wrapper: HTMLElement) => void
+  /**
+   * Fills the translated span. Defaults to a single text node; bilingual
+   * paragraphs with inline atoms (formulas) pass a renderer that rebuilds the
+   * text around cloned formula elements. Runs on the still-detached span, so
+   * the wrapper still receives ONE append and the #1918 snapshot below sees
+   * the final content.
+   */
+  renderTranslatedContent?: (translatedNode: HTMLElement, translatedText: string) => void
 }
 
-function isFloatedElement(element: HTMLElement): boolean {
-  const floatValue = window.getComputedStyle(element).float
-  return floatValue === "left" || floatValue === "right"
+function sourceRunMatchesSelector(sources: readonly TransNode[], selector: string | null): boolean {
+  if (selector === null) return false
+
+  return sources.some((source) => {
+    const element = isHTMLElement(source) ? source : source.parentElement
+    return element?.matches(selector) ?? false
+  })
 }
 
-function hasVisibleLayoutBox(element: HTMLElement): boolean {
-  const rect = element.getBoundingClientRect()
-  return rect.width > 0 && rect.height > 0
-}
+function resolveLineHeight(style: CSSStyleDeclaration): number | null {
+  const lineHeight = Number.parseFloat(style.lineHeight)
+  if (Number.isFinite(lineHeight) && lineHeight > 0) return lineHeight
 
-function findActiveFloatSibling(paragraphElement: HTMLElement): HTMLElement | null {
-  const flowContainer = paragraphElement.parentElement
-  if (!flowContainer) return null
-
-  const paragraphRect = paragraphElement.getBoundingClientRect()
-
-  for (const sibling of flowContainer.children) {
-    if (!isHTMLElement(sibling)) continue
-    if (sibling === paragraphElement || sibling.contains(paragraphElement)) continue
-
-    const floatCandidates = [sibling, ...sibling.querySelectorAll<HTMLElement>("*")]
-    for (const candidate of floatCandidates) {
-      if (!isFloatedElement(candidate) || !hasVisibleLayoutBox(candidate)) continue
-
-      const floatRect = candidate.getBoundingClientRect()
-      const verticallyAffectsParagraph =
-        paragraphRect.top < floatRect.bottom - 1 && paragraphRect.bottom > floatRect.top + 1
-      if (verticallyAffectsParagraph) return candidate
-    }
-  }
+  // `line-height: normal` is a keyword, not a length; approximate from the font.
+  const fontSize = Number.parseFloat(style.fontSize)
+  if (Number.isFinite(fontSize) && fontSize > 0) return fontSize * 1.5
 
   return null
 }
 
-function shouldWrapInsideFloatFlow(targetNode: TransNode): boolean {
-  const paragraphElement = isHTMLElement(targetNode)
-    ? targetNode.hasAttribute(PARAGRAPH_ATTRIBUTE)
-      ? targetNode
-      : targetNode.closest<HTMLElement>(`[${PARAGRAPH_ATTRIBUTE}]`)
-    : targetNode.parentElement?.closest<HTMLElement>(`[${PARAGRAPH_ATTRIBUTE}]`)
-  if (!paragraphElement) return false
+/** Bottom of everything that precedes the wrapper inside its parent. */
+function measureContentBottomBeforeWrapper(wrapper: HTMLElement): number | null {
+  const host = wrapper.parentElement
+  if (!host) return null
 
-  const activeFloat = findActiveFloatSibling(paragraphElement)
-  return !!activeFloat
+  const range = getOwnerDocument(host).createRange()
+  range.setStart(host, 0)
+  range.setEndBefore(wrapper)
+  const rect = range.getBoundingClientRect()
+  // Nothing precedes the wrapper (or the host is not laid out): all-zero rect.
+  if (rect.width <= 0 && rect.height <= 0) return null
+
+  return rect.bottom
+}
+
+/**
+ * A block translation renders as `inline-block` (translation-node-preset.css) so
+ * its decoration hugs the text. That makes it an atomic inline: when a float
+ * leaves the line too narrow, the browser drops the entire box below the float
+ * rather than wrapping the text beside it. Against a tall float — a Wikipedia
+ * infobox easily runs a few thousand pixels — the translation is stranded that
+ * far below the paragraph it belongs to, leaving a huge blank gap.
+ *
+ * Detect the drop by measuring where the translation actually landed instead of
+ * hunting for the float in the DOM. The float is frequently nowhere near the
+ * paragraph in the tree: on ja.wikipedia the infobox floats out of a sibling of
+ * an ancestor `<section>`, so a scan of the paragraph's own siblings never sees
+ * it. Layout truth is structure-agnostic and costs two rect reads.
+ */
+function isDisplacedBelowFloat(translatedNode: HTMLElement): boolean {
+  const wrapper = translatedNode.parentElement
+  if (!wrapper) return false
+
+  const contentBottom = measureContentBottomBeforeWrapper(wrapper)
+  if (contentBottom === null) return false
+
+  const translatedRect = translatedNode.getBoundingClientRect()
+  if (translatedRect.height <= 0) return false
+
+  const style = window.getComputedStyle(translatedNode)
+  const lineHeight = resolveLineHeight(style)
+  // Without font metrics there is no scale to judge the gap against, and a zero
+  // threshold would flag every ordinary translation. Leave the layout alone.
+  if (lineHeight === null) return false
+  const marginTop = Number.parseFloat(style.marginTop) || 0
+
+  // Undisplaced, the translation opens the line right after the source text, so
+  // the gap is just its top margin plus line leading. Allowing a whole extra
+  // line keeps normal spacing well clear of the threshold while any real float
+  // drop — at minimum the float's remaining height — stays far above it.
+  return translatedRect.top - contentBottom > marginTop + lineHeight
 }
 
 export function addInlineTranslation(
@@ -95,7 +133,14 @@ export function addBlockTranslation(
 
 export async function insertTranslatedNodeIntoWrapper(
   translatedWrapperNode: HTMLElement,
-  { flowSource, layoutSource, sourceText, isCurrent }: TranslationInsertionContext,
+  {
+    layoutSource,
+    styleSources,
+    sourceText,
+    isCurrent,
+    onContentInserted,
+    renderTranslatedContent,
+  }: TranslationInsertionContext,
   translatedText: string,
   translationNodeStyle: TranslationNodeStyleConfig,
   config: Config,
@@ -109,43 +154,71 @@ export async function insertTranslatedNodeIntoWrapper(
   const layoutSourceDisplay = isHTMLElement(layoutSource)
     ? window.getComputedStyle(layoutSource).display
     : undefined
-  const siteRuleForceInline =
-    isHTMLElement(layoutSource) && isSiteRuleForceInlineElement(layoutSource, config)
-  const forceInlineTranslation =
-    isForceInlineTranslation(layoutSource, layoutSourceDisplay) || siteRuleForceInline
+  const { forceBlockStyleSelector, forceInlineStyleSelector } = getDocumentSiteRule(config)
+  const wrapperStyleSources = styleSources ?? [layoutSource]
+  const siteRuleForceBlockStyle = sourceRunMatchesSelector(
+    wrapperStyleSources,
+    forceBlockStyleSelector,
+  )
+  const siteRuleForceInlineStyle = sourceRunMatchesSelector(
+    wrapperStyleSources,
+    forceInlineStyleSelector,
+  )
+  const forceInlineTranslation = isForceInlineTranslation(layoutSource, layoutSourceDisplay, config)
   const shortInlineTranslation =
     isShortInlineTranslationText(sourceText) && layoutSourceDisplay !== "contents"
-  const siteRuleForceBlock =
-    isHTMLElement(layoutSource) && isSiteRuleForceBlockElement(layoutSource, config)
 
-  // priority: siteRuleForceBlock > forceInlineTranslation > forceBlockTranslation >
-  // shortInlineTranslation > isInlineTransNode > isBlockTransNode
-  if (siteRuleForceBlock) {
+  // Site style overrides are the explicit outer priority. Existing layout
+  // heuristics and the pre-Node-override classification remain fallbacks
+  // within that boundary, so Node-only rules cannot change wrapper styling.
+  if (siteRuleForceBlockStyle) {
     addBlockTranslation(ownerDoc, translatedWrapperNode, translatedNode)
+  } else if (siteRuleForceInlineStyle) {
+    addInlineTranslation(ownerDoc, translatedWrapperNode, translatedNode)
   } else if (forceInlineTranslation) {
     addInlineTranslation(ownerDoc, translatedWrapperNode, translatedNode)
   } else if (forceBlockTranslation) {
     addBlockTranslation(ownerDoc, translatedWrapperNode, translatedNode)
   } else if (shortInlineTranslation) {
     addInlineTranslation(ownerDoc, translatedWrapperNode, translatedNode)
-  } else if (isInlineTransNode(layoutSource)) {
+  } else if (isNaturalInlineTransNode(layoutSource)) {
     addInlineTranslation(ownerDoc, translatedWrapperNode, translatedNode)
-  } else if (isBlockTransNode(layoutSource)) {
+  } else if (isNaturalBlockTransNode(layoutSource)) {
     addBlockTranslation(ownerDoc, translatedWrapperNode, translatedNode)
   } else {
     // not inline or block, maybe notranslate
     return
   }
 
-  translatedNode.textContent = translatedText
+  if (renderTranslatedContent) {
+    renderTranslatedContent(translatedNode, translatedText)
+  } else {
+    translatedNode.textContent = translatedText
+  }
   translatedWrapperNode.appendChild(translatedNode)
+  // Synchronous, pre-await: see TranslationInsertionContext.onContentInserted.
+  onContentInserted?.(translatedWrapperNode)
   await decorateTranslationNode(translatedNode, translationNodeStyle)
 
   if (isCurrent && !isCurrent()) return
 
+  // GitHub renders footnotes inside <sub> with line-height: 0. The original
+  // text wraps in the outer paragraph's line boxes, but our block translation
+  // is an inline-block inside <sub> and lays out its own lines. Inheriting
+  // that zero line height gives those lines no vertical advance: they paint
+  // at the same y coordinate while the translation's content box has no height.
+  // Inline translations still flow through the paragraph's line boxes, so
+  // leave their inherited line height alone.
   if (
     translatedNode.classList.contains(BLOCK_CONTENT_CLASS) &&
-    shouldWrapInsideFloatFlow(flowSource)
+    Number.parseFloat(window.getComputedStyle(translatedNode).lineHeight) === 0
+  ) {
+    translatedNode.style.lineHeight = "normal"
+  }
+
+  if (
+    translatedNode.classList.contains(BLOCK_CONTENT_CLASS) &&
+    isDisplacedBelowFloat(translatedNode)
   ) {
     translatedNode.setAttribute(FLOAT_WRAP_ATTRIBUTE, "true")
   }

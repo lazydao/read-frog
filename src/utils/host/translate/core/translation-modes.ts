@@ -1,24 +1,37 @@
 import type { Config } from "@/types/config/config"
 import type { TranslationMode } from "@/types/config/translate"
 import type { TransNode } from "@/types/dom"
-import { resolveProviderConfig } from "@/utils/constants/feature-providers"
-import { logger } from "@/utils/logger"
 import {
   CONTENT_WRAPPER_CLASS,
   NOTRANSLATE_CLASS,
+  PARAGRAPH_ATTRIBUTE,
   TRANSLATION_ERROR_CONTAINER_CLASS,
   TRANSLATION_MODE_ATTRIBUTE,
   TRANSLATION_ONLY_ATTRIBUTE,
   VIRTUAL_PARAGRAPH_ATTRIBUTE,
   WALKED_ATTRIBUTE,
 } from "../../../constants/dom-labels"
+import {
+  GIANT_PARAGRAPH_SPLIT_MIN_VIEWPORT_PX,
+  GIANT_PARAGRAPH_SPLIT_VIEWPORT_MULTIPLIER,
+} from "../../../constants/translate"
 import { batchDOMOperation } from "../../dom/batch-dom"
-import { isBlockTransNode, isHTMLElement, isTextNode, isTransNode } from "../../dom/filter"
+import {
+  isBlockTransNode,
+  isHTMLElement,
+  isNaturalBlockTransNode,
+  isSiteRuleForceBlockStyleElement,
+  isTextNode,
+  isTransNode,
+} from "../../dom/filter"
 import { unwrapDeepestOnlyHTMLChild } from "../../dom/find"
 import { getOwnerDocument } from "../../dom/node"
-import { extractTextContent } from "../../dom/traversal"
+import { canSplitGiantWithoutStrandingOwnText } from "../../dom/traversal"
+import { containsInlineAtomOutsideWrappers, renderInlineAtomTranslation } from "../dom/inline-atoms"
 import {
   buildVirtualParagraphPlan,
+  canMaterializeVirtualParagraphUnits,
+  isNewlinePreservingElement,
   moveParagraphInsertionBoundaryAfterTrailingInlineImages,
   type VirtualParagraphUnit,
 } from "../dom/paragraph-segmentation"
@@ -29,39 +42,48 @@ import {
   removeOrphanVirtualParagraphWrappers,
   removeTranslatedWrapperWithRestore,
   restoreTranslationOnlySwapsForAnchor,
+  teardownVirtualTranslationOnlyGeneration,
 } from "../dom/translation-cleanup"
-import { protectTranslationHtmlAttributes } from "../dom/translation-html-attributes"
 import { insertTranslatedNodeIntoWrapper } from "../dom/translation-insertion"
 import {
   applyInPlaceTextSwap,
+  ensureTranslationOnlyAnchorState,
   planInPlaceTextSwap,
   snapshotSourceTextNodes,
   verifySourceSnapshot,
 } from "../dom/translation-text-swap"
 import { findPreviousTranslatedWrapperInside } from "../dom/translation-wrapper"
-import { insertVirtualParagraphWrappers } from "../dom/virtual-paragraph-insertion"
-import { shouldFilterSmallParagraph } from "../filter-small-paragraph"
-import { isHtmlAttributeMarkerIntegrityError } from "../html-attribute-markers"
-import { shouldSkipAsTargetLanguage } from "../target-language-skip"
-import { normalizeForComparison } from "../text-preparation"
+import {
+  insertVirtualParagraphWrappers,
+  materializeVirtualParagraphUnitRuns,
+} from "../dom/virtual-paragraph-insertion"
 import { translateTextForPage } from "../translate-variants"
 import { setTranslationDirAndLang } from "../translation-attributes"
 import { createSpinnerInside, getTranslatedTextAndRemoveSpinner } from "../ui/spinner"
-import { isNumericContent } from "../ui/translation-utils"
+import {
+  createPageTranslationRequest,
+  getDisplayTranslation,
+  preparePageTranslationSource,
+  shouldSkipPageTranslationText,
+} from "./translation-request"
 import {
   attachBilingualTranslationWrapper,
   collectSourceTextExcludingWrappers,
+  countWrapperTamperRepair,
   getBilingualTranslationStateForSource,
   getTranslationOnlyAnchorState,
   getVirtualParagraphGroupForSource,
   isBilingualTranslationStateCurrent,
+  isBilingualWrapperContentTampered,
   isVirtualParagraphGroupCurrent,
   markExtensionDrivenNodeRemoval,
   markVirtualParagraphGroupInserted,
+  MAX_WRAPPER_TAMPER_REPAIRS,
   registerBilingualTranslationState,
   registerTranslationOnlyOriginals,
   registerVirtualParagraphGroup,
   registerVirtualParagraphWrapper,
+  resetWrapperTamperRepairs,
   translatingNodes,
   unregisterBilingualTranslationState,
   type BilingualTranslationState,
@@ -70,80 +92,7 @@ import {
 } from "./translation-state"
 
 let virtualParagraphGroupSequence = 0
-const unsupportedDeepLXHtmlAttributeProviders = new Set<string>()
-const supportedDeepLXHtmlAttributeProviders = new Set<string>()
-type DeepLXHtmlAttributeProbeResult = "supported" | "unsupported" | "unknown"
-interface DeepLXHtmlAttributeProbe {
-  promise: Promise<DeepLXHtmlAttributeProbeResult>
-  resolve: (result: DeepLXHtmlAttributeProbeResult) => void
-}
-const deepLXHtmlAttributeProbes = new Map<string, DeepLXHtmlAttributeProbe>()
-
-function createDeepLXHtmlAttributeProbe(): DeepLXHtmlAttributeProbe {
-  let resolve!: (result: DeepLXHtmlAttributeProbeResult) => void
-  const promise = new Promise<DeepLXHtmlAttributeProbeResult>((resolvePromise) => {
-    resolve = resolvePromise
-  })
-  return { promise, resolve }
-}
-
-function finishDeepLXHtmlAttributeProbe(
-  providerKey: string,
-  probe: DeepLXHtmlAttributeProbe | undefined,
-  result: DeepLXHtmlAttributeProbeResult,
-): void {
-  if (!probe || deepLXHtmlAttributeProbes.get(providerKey) !== probe) return
-  deepLXHtmlAttributeProbes.delete(providerKey)
-  probe.resolve(result)
-}
-
-async function acquireDeepLXHtmlAttributeProbe(providerKey: string): Promise<{
-  probe?: DeepLXHtmlAttributeProbe
-  useLegacy: boolean
-}> {
-  while (true) {
-    if (unsupportedDeepLXHtmlAttributeProviders.has(providerKey)) {
-      return { useLegacy: true }
-    }
-    if (supportedDeepLXHtmlAttributeProviders.has(providerKey)) {
-      return { useLegacy: false }
-    }
-
-    const activeProbe = deepLXHtmlAttributeProbes.get(providerKey)
-    if (!activeProbe) {
-      const probe = createDeepLXHtmlAttributeProbe()
-      deepLXHtmlAttributeProbes.set(providerKey, probe)
-      return { probe, useLegacy: false }
-    }
-
-    // An empty/skipped request or a transient error proves neither support nor
-    // incompatibility. Re-enter the loop so exactly one waiter owns the next probe.
-    await activeProbe.promise
-  }
-}
-
-function getDeepLXHtmlAttributeProviderKey(config: Config): string | undefined {
-  const providerConfig = resolveProviderConfig(config, "translate")
-  if (providerConfig.provider !== "deeplx") return undefined
-  return `${providerConfig.id}:${providerConfig.baseURL ?? ""}`
-}
-
-function getDisplayTranslation(
-  sourceText: string,
-  translatedText: string | undefined,
-  comparisonText: string | undefined = translatedText,
-) {
-  if (translatedText === undefined) {
-    return undefined
-  }
-
-  // comparisonText lets the HTML-marker path (#1832) compare a normalized
-  // variant while the raw translatedText is what gets displayed; the folding
-  // normalization (#1835) applies on top for both paths.
-  return normalizeForComparison(sourceText) === normalizeForComparison(comparisonText)
-    ? ""
-    : translatedText
-}
+let virtualTranslationOnlyGenerationSequence = 0
 
 function createBilingualWrapper(
   ownerDoc: Document,
@@ -168,11 +117,10 @@ async function filterVirtualParagraphUnits(
   bypassTargetLanguageSkip: boolean,
 ): Promise<VirtualParagraphUnit[]> {
   const included = await Promise.all(
-    units.map(async (unit) => {
-      if (isNumericContent(unit.text)) return false
-      if (await shouldFilterSmallParagraph(unit.text, config)) return false
-      return bypassTargetLanguageSkip || !(await shouldSkipAsTargetLanguage(unit.text, config))
-    }),
+    units.map(
+      async (unit) =>
+        !(await shouldSkipPageTranslationText(unit.text, config, bypassTargetLanguageSkip)),
+    ),
   )
   return units.filter((_, index) => included[index])
 }
@@ -184,8 +132,9 @@ async function translateVirtualParagraph(
   nodes: ChildNode[],
   config: Config,
   forceBlockTranslation: boolean,
+  forceRetranslation: boolean = false,
 ): Promise<void> {
-  const { flowSource, unit, wrapper } = entry
+  const { unit, wrapper } = entry
   const isCurrent = () => isVirtualParagraphGroupCurrent(group, wrapper)
   if (!isCurrent()) return
 
@@ -195,6 +144,14 @@ async function translateVirtualParagraph(
     spinner,
     wrapper,
     isCurrent,
+    "plain",
+    // Virtual units exist only inside newline-preserving containers, so their
+    // interior single newlines (bullet lists) are always semantic.
+    () =>
+      translateTextForPage(unit.text, "plain", {
+        preserveLineBreaks: true,
+        forceRetranslation,
+      }),
   )
   if (!isCurrent()) {
     disposeVirtualParagraphGroup(group)
@@ -215,9 +172,9 @@ async function translateVirtualParagraph(
 
   await insertTranslatedNodeIntoWrapper(
     wrapper,
-    { flowSource, isCurrent, layoutSource: group.layoutSource, sourceText: unit.text },
+    { isCurrent, layoutSource: group.layoutSource, sourceText: unit.text },
     translatedText,
-    config.translate.translationNodeStyle,
+    config.pageTranslation.translationNodeStyle,
     config,
     forceBlockTranslation,
   )
@@ -233,6 +190,7 @@ async function translateVirtualParagraphs(
   config: Config,
   forceBlockTranslation: boolean,
   bypassTargetLanguageSkip: boolean,
+  forceRetranslation: boolean = false,
 ): Promise<void> {
   const group: VirtualParagraphGroup = {
     id: `${walkId}:${virtualParagraphGroupSequence++}`,
@@ -284,7 +242,7 @@ async function translateVirtualParagraphs(
 
   let inserted: ReturnType<typeof insertVirtualParagraphWrappers>["inserted"]
   try {
-    ;({ inserted } = insertVirtualParagraphWrappers(entries, layoutSource, group.splitRecords))
+    ;({ inserted } = insertVirtualParagraphWrappers(entries, group.splitRecords))
   } catch (error) {
     disposeVirtualParagraphGroup(group)
     throw error
@@ -305,6 +263,7 @@ async function translateVirtualParagraphs(
         nodes,
         config,
         forceBlockTranslation,
+        forceRetranslation,
       ),
     ),
   )
@@ -316,12 +275,20 @@ export async function translateNodes(
   toggle: boolean = false,
   config: Config,
   forceBlockTranslation: boolean = false,
+  forceRetranslation: boolean = false,
 ): Promise<void> {
-  const translationMode = config.translate.mode
+  const translationMode = config.pageTranslation.mode
   if (translationMode === "translationOnly") {
-    await translateNodeTranslationOnlyMode(nodes, walkId, config, toggle)
+    await translateNodeTranslationOnlyMode(nodes, walkId, config, toggle, forceRetranslation)
   } else if (translationMode === "bilingual") {
-    await translateNodesBilingualMode(nodes, walkId, config, toggle, forceBlockTranslation)
+    await translateNodesBilingualMode(
+      nodes,
+      walkId,
+      config,
+      toggle,
+      forceBlockTranslation,
+      forceRetranslation,
+    )
   }
 }
 
@@ -331,6 +298,7 @@ export async function translateNodesBilingualMode(
   config: Config,
   toggle: boolean = false,
   forceBlockTranslation: boolean = false,
+  forceRetranslation: boolean = false,
 ): Promise<void> {
   const transNodes = nodes.filter((node) => isTransNode(node))
   if (transNodes.length === 0) {
@@ -369,6 +337,24 @@ export async function translateNodesBilingualMode(
         isBilingualTranslationStateCurrent(existingBilingualState)
       if (!toggle && isSameActiveWalk) return
 
+      if (!toggle && isBilingualWrapperContentTampered(existingBilingualState)) {
+        // The site rewrote our wrapper content while the host text is intact
+        // (#1918). Repair by retranslating — but a script that rewrites
+        // deterministically would fight forever (the retranslation budget
+        // bounds rate, not duration), so after MAX_WRAPPER_TAMPER_REPAIRS
+        // losses adopt the site's version as the expected content: the
+        // pre-#1918 terminal state, reached after real repair attempts.
+        if (countWrapperTamperRepair(layoutSource) > MAX_WRAPPER_TAMPER_REPAIRS) {
+          existingBilingualState.wrapperTextContent =
+            existingBilingualState.wrapper?.textContent ?? null
+          return
+        }
+      } else {
+        // Genuine host change, toggle, or new session: the fight (if any) is
+        // over — re-arm the capitulation budget.
+        resetWrapperTamperRepairs(layoutSource)
+      }
+
       if (existingBilingualState.wrapper) {
         removeTranslatedWrapperWithRestore(existingBilingualState.wrapper)
       } else {
@@ -388,7 +374,15 @@ export async function translateNodesBilingualMode(
 
     if (virtualLayoutSource) {
       const virtualParagraphPlan = buildVirtualParagraphPlan(virtualLayoutSource, config)
-      if (virtualParagraphPlan.units.length >= 2) {
+      // Virtual unit texts cannot carry inline-atom placeholders (the raw
+      // source collector drops atoms behind barriers), so a container that
+      // holds a formula stays on the whole-run path below, where the formulas
+      // are cloned into the translation. Checked only once a multi-unit plan
+      // exists, so ordinary containers pay nothing.
+      if (
+        virtualParagraphPlan.units.length >= 2 &&
+        !containsInlineAtomOutsideWrappers(virtualLayoutSource, config)
+      ) {
         // Explicit blank-line boundaries represent block paragraphs even when
         // an individual unit is short enough for the compact-label heuristic.
         await translateVirtualParagraphs(
@@ -398,17 +392,22 @@ export async function translateNodesBilingualMode(
           virtualLayoutSource,
           walkId,
           config,
-          true,
+          forceBlockTranslation || isNaturalBlockTransNode(virtualLayoutSource),
           toggle,
+          forceRetranslation,
         )
         return
       }
     }
 
-    const insertionTarget =
-      transNodes.length === 1 && isBlockTransNode(layoutSource) && isHTMLElement(layoutSource)
-        ? unwrapDeepestOnlyHTMLChild(layoutSource, config)
-        : layoutSource
+    const shouldUnwrapSingleBlockSource =
+      transNodes.length === 1 &&
+      isHTMLElement(layoutSource) &&
+      (isNaturalBlockTransNode(layoutSource) ||
+        (isBlockTransNode(layoutSource) && isSiteRuleForceBlockStyleElement(layoutSource, config)))
+    const insertionTarget = shouldUnwrapSingleBlockSource
+      ? unwrapDeepestOnlyHTMLChild(layoutSource, config)
+      : layoutSource
 
     const existedTranslatedWrapper = findPreviousTranslatedWrapperInside(insertionTarget, walkId)
     if (existedTranslatedWrapper) {
@@ -417,7 +416,14 @@ export async function translateNodesBilingualMode(
         return
       }
       nodes.forEach((node) => translatingNodes.delete(node))
-      return translateNodesBilingualMode(nodes, walkId, config, toggle, forceBlockTranslation)
+      return translateNodesBilingualMode(
+        nodes,
+        walkId,
+        config,
+        toggle,
+        forceBlockTranslation,
+        forceRetranslation,
+      )
     }
 
     // After a translationOnly session, an in-place-swapped paragraph has no
@@ -437,11 +443,9 @@ export async function translateNodesBilingualMode(
     const sourceTextBeforeFilter = isHTMLElement(layoutSource)
       ? collectSourceTextExcludingWrappers(layoutSource)
       : null
-    const textContent = transNodes
-      .map((node) => extractTextContent(node, config))
-      .join("")
-      .trim()
-    if (!textContent || isNumericContent(textContent)) return
+    const atomExtraction = preparePageTranslationSource(transNodes, config)
+    if (!atomExtraction) return
+    const requestText = atomExtraction.requestText
 
     let bilingualState: BilingualTranslationState | undefined
     if (isHTMLElement(layoutSource) && sourceTextBeforeFilter !== null) {
@@ -451,6 +455,7 @@ export async function translateNodesBilingualMode(
         status: "active",
         walkId,
         wrapper: null,
+        wrapperTextContent: null,
       }
       registerBilingualTranslationState(bilingualState)
     }
@@ -460,9 +465,7 @@ export async function translateNodesBilingualMode(
       // Automatic/page translation skips target-language paragraphs before
       // touching the DOM. A toggle is an explicit node-translation request,
       // so it must honor the user's intent even on mixed-language pages.
-      shouldFilter =
-        (await shouldFilterSmallParagraph(textContent, config)) ||
-        (!toggle && (await shouldSkipAsTargetLanguage(textContent, config)))
+      shouldFilter = await shouldSkipPageTranslationText(atomExtraction.filterText, config, toggle)
     } catch (error) {
       if (bilingualState) unregisterBilingualTranslationState(bilingualState)
       throw error
@@ -475,7 +478,14 @@ export async function translateNodesBilingualMode(
       unregisterBilingualTranslationState(bilingualState)
       if (shouldRetry) {
         nodes.forEach((node) => translatingNodes.delete(node))
-        return translateNodesBilingualMode(nodes, walkId, config, toggle, forceBlockTranslation)
+        return translateNodesBilingualMode(
+          nodes,
+          walkId,
+          config,
+          toggle,
+          forceBlockTranslation,
+          forceRetranslation,
+        )
       }
       return
     }
@@ -527,12 +537,32 @@ export async function translateNodesBilingualMode(
         ? isBilingualTranslationStateCurrent(bilingualState)
         : translatedWrapperNode.isConnected
 
+    // Newline-preserving containers render single "\n" as real line breaks
+    // (an X tweet whose lines have no blank-line separators is ONE unit here,
+    // e.g. https://x.com/EpsteinJeffrey0/status/2083709421386080579 — five
+    // lines split by single "\n" that Google merged into one run-on line),
+    // so the provider must not collapse them. The FLOW CONTAINER's white-space
+    // governs how the run's newlines render: for an inline layout source
+    // (e.g. a GitHub inline <code> with its own break-spaces inside a normal
+    // paragraph) the parent's value is authoritative, not the element's own.
+    const flowContainer =
+      isHTMLElement(layoutSource) && isBlockTransNode(layoutSource)
+        ? layoutSource
+        : layoutSource.parentElement
+    const preserveLineBreaks = flowContainer ? isNewlinePreservingElement(flowContainer) : false
+
+    const request = createPageTranslationRequest(atomExtraction, config, "plain", {
+      preserveLineBreaks,
+      forceRetranslation,
+    })
     const realTranslatedText = await getTranslatedTextAndRemoveSpinner(
       nodes,
-      textContent,
+      request.sourceText,
       spinner,
       translatedWrapperNode,
       isCurrent,
+      request.textFormat,
+      request.translate,
     )
 
     if (!isCurrent()) {
@@ -540,7 +570,8 @@ export async function translateNodesBilingualMode(
       return
     }
 
-    const translatedText = getDisplayTranslation(textContent, realTranslatedText)
+    // Compared on the tokenized strings: an echo comes back with its tokens.
+    const translatedText = request.getDisplayText(realTranslatedText)
 
     if (translatedText === "") {
       removeTranslatedWrapperWithRestore(translatedWrapperNode)
@@ -555,9 +586,28 @@ export async function translateNodesBilingualMode(
 
     await insertTranslatedNodeIntoWrapper(
       translatedWrapperNode,
-      { flowSource: insertionTarget, isCurrent, layoutSource, sourceText: textContent },
+      {
+        isCurrent,
+        layoutSource,
+        styleSources: transNodes,
+        // Wrapper-content integrity snapshot (#1918): armed synchronously at
+        // append time so a site rewrite landing during the decorate await can
+        // never be canonized as the expected content.
+        onContentInserted: (wrapper) => {
+          if (bilingualState) bilingualState.wrapperTextContent = wrapper.textContent
+        },
+        // Inline atoms are cloned into the translated span at their
+        // placeholder positions; the tokenized text also stands in for the
+        // formulas' visible width in the short-inline layout heuristic.
+        renderTranslatedContent:
+          atomExtraction.atoms.length > 0
+            ? (translatedNode, text) =>
+                renderInlineAtomTranslation(translatedNode, text, atomExtraction)
+            : undefined,
+        sourceText: requestText,
+      },
       translatedText,
-      config.translate.translationNodeStyle,
+      config.pageTranslation.translationNodeStyle,
       config,
       forceBlockTranslation || hasTrailingInlineImageAttachment,
     )
@@ -594,11 +644,236 @@ function findRunTranslationOnlyWrapper(
   return null
 }
 
+/**
+ * Entry point for translationOnly mode. Picks the granularity — one run for
+ * the whole request, or one run per blank-line paragraph — and leaves the
+ * translating to `translateTranslationOnlyRun`.
+ */
 export async function translateNodeTranslationOnlyMode(
   nodes: ChildNode[],
   walkId: string,
   config: Config,
   toggle: boolean = false,
+  forceRetranslation: boolean = false,
+): Promise<void> {
+  const outerTransNodes = nodes.filter(isTransNode)
+  if (outerTransNodes.length === 0) return
+
+  const layoutSource = outerTransNodes[0]!
+  const isSingleBlockSource =
+    outerTransNodes.length === 1 && isHTMLElement(layoutSource) && isBlockTransNode(layoutSource)
+  if (isSingleBlockSource) {
+    const handled = await maybeTranslateVirtualUnitRuns(
+      layoutSource,
+      nodes,
+      walkId,
+      config,
+      toggle,
+      forceRetranslation,
+    )
+    if (handled) return
+  }
+
+  return translateTranslationOnlyRun(nodes, walkId, config, toggle, forceRetranslation)
+}
+
+/** A container taller than this is what the observer treats as a giant. */
+function isGiantParagraphUnit(element: HTMLElement): boolean {
+  const maxUnitHeight =
+    Math.max(window.innerHeight, GIANT_PARAGRAPH_SPLIT_MIN_VIEWPORT_PX) *
+    GIANT_PARAGRAPH_SPLIT_VIEWPORT_MULTIPLIER
+  return element.getBoundingClientRect().height > maxUnitHeight
+}
+
+/** Labeled paragraphs directly under `container`, with no paragraph in between. */
+function collectTopLevelParagraphDescendants(container: HTMLElement): HTMLElement[] {
+  return [...container.querySelectorAll<HTMLElement>(`[${PARAGRAPH_ATTRIBUTE}]`)].filter(
+    (paragraph) => {
+      const ancestor = paragraph.parentElement?.closest(`[${PARAGRAPH_ATTRIBUTE}]`)
+      return !ancestor || ancestor === container || !container.contains(ancestor)
+    },
+  )
+}
+
+/**
+ * A giant container whose plan cannot be materialized must NOT collapse into a
+ * single request. The observer only hands such a container over whole because
+ * the same predicate said its units were materializable; if the host reshaped
+ * the DOM in between, translating it as one run would ship a whole 22k-char
+ * note tweet in one payload and, on a failed alignment, displace every one of
+ * its framework-owned nodes into a wrapper. Translating each labeled paragraph
+ * separately reproduces what per-paragraph observation would have done.
+ */
+async function translateNonMaterializableGiant(
+  layoutSource: HTMLElement,
+  walkId: string,
+  config: Config,
+  forceRetranslation: boolean,
+): Promise<boolean> {
+  if (!isGiantParagraphUnit(layoutSource)) return false
+  // Same content guard the observation gate applies: splitting into descendant
+  // paragraphs drops the container's own direct text. Falling back to the
+  // single run keeps that text rather than silently losing it here, after the
+  // observer already refused to lose it.
+  if (!canSplitGiantWithoutStrandingOwnText(layoutSource)) return false
+
+  const paragraphs = collectTopLevelParagraphDescendants(layoutSource)
+  if (paragraphs.length === 0) return false
+
+  await Promise.allSettled(
+    paragraphs.map((paragraph) =>
+      translateTranslationOnlyRun([paragraph], walkId, config, false, forceRetranslation),
+    ),
+  )
+  return true
+}
+
+/**
+ * Translate a newline-preserving container one blank-line paragraph at a time,
+ * matching the granularity bilingual mode gets from its virtual-paragraph plan.
+ *
+ * Each unit becomes a run of whole child nodes and goes through the ordinary
+ * per-run pipeline, so every unit gets its own request, its own small-paragraph
+ * and target-language filtering, its own spinner and error UI, and its own
+ * restore record. Returns false when this container is not one to segment, so
+ * the caller falls back to translating the request as a single run.
+ */
+async function maybeTranslateVirtualUnitRuns(
+  layoutSource: HTMLElement,
+  nodes: ChildNode[],
+  walkId: string,
+  config: Config,
+  toggle: boolean,
+  forceRetranslation: boolean,
+): Promise<boolean> {
+  const previousState = getTranslationOnlyAnchorState(layoutSource)
+  const hasPreviousGeneration =
+    previousState !== undefined &&
+    (previousState.virtualGeneration !== undefined || (previousState.splitRecords?.length ?? 0) > 0)
+
+  if (hasPreviousGeneration) {
+    // Rebuild from scratch rather than patching a live generation: a plan built
+    // over half-restored text would read our own translations as source and
+    // send them back to the provider, and a second round of cuts over the first
+    // round's tails could no longer be rejoined.
+    teardownVirtualTranslationOnlyGeneration(layoutSource)
+    if (toggle) return true
+  } else if (
+    previousState !== undefined ||
+    layoutSource.querySelector(`.${CONTENT_WRAPPER_CLASS}`) !== null
+  ) {
+    // This container was translated as a single run. Its own path knows how to
+    // restore or replace that, and segmenting on top of it would translate our
+    // own output.
+    return false
+  }
+
+  const plan = buildVirtualParagraphPlan(layoutSource, config)
+  if (plan.units.length < 2) return false
+
+  if (!canMaterializeVirtualParagraphUnits(layoutSource, plan, config)) {
+    return translateNonMaterializableGiant(layoutSource, walkId, config, forceRetranslation)
+  }
+
+  if (nodes.every((node) => translatingNodes.has(node))) return true
+  nodes.forEach((node) => translatingNodes.add(node))
+
+  try {
+    // Claim the anchor before cutting anything: from here on the marker is what
+    // lets a page-wide cleanup find these cuts, even if every unit then fails.
+    const state = ensureTranslationOnlyAnchorState(
+      layoutSource,
+      config,
+      getTranslationOnlyAnchorState,
+    )
+    state.splitRecords ??= []
+    virtualTranslationOnlyGenerationSequence += 1
+    const generation = virtualTranslationOnlyGenerationSequence
+    state.virtualGeneration = generation
+    const isCurrent = () =>
+      getTranslationOnlyAnchorState(layoutSource)?.virtualGeneration === generation
+
+    const runs = materializeVirtualParagraphUnitRuns(layoutSource, plan, config, state.splitRecords)
+    if (!runs) {
+      // The host reshaped the container between planning and cutting. Undo
+      // whatever was cut and let the single-run path have the request.
+      teardownVirtualTranslationOnlyGeneration(layoutSource)
+      return false
+    }
+
+    await Promise.allSettled(
+      runs.map((run) =>
+        translateTranslationOnlyRun(
+          run.nodes,
+          walkId,
+          config,
+          false,
+          forceRetranslation,
+          isCurrent,
+        ),
+      ),
+    )
+
+    // Queued, not called: each unit applies its swap through the same batch, so
+    // running now would read an empty anchor and undo the generation just
+    // before its own translations land.
+    batchDOMOperation(() => {
+      if (isCurrent()) endVirtualTranslationOnlyGeneration(layoutSource)
+    })
+    return true
+  } finally {
+    nodes.forEach((node) => translatingNodes.delete(node))
+  }
+}
+
+/**
+ * Close a finished generation. Units that landed keep their own swap records
+ * (on the container or, for a single-element unit, on that element), so the
+ * anchor stays. When nothing landed at all — every unit filtered out, or every
+ * translation equal to its source — the container is handed back exactly as it
+ * was found, cuts rejoined and marker removed.
+ */
+function endVirtualTranslationOnlyGeneration(layoutSource: HTMLElement): void {
+  const state = getTranslationOnlyAnchorState(layoutSource)
+  if (!state) return
+
+  const leftNoTrace =
+    state.swaps.length === 0 &&
+    layoutSource.querySelector(`[${TRANSLATION_ONLY_ATTRIBUTE}]`) === null &&
+    // An error UI still on screen belongs to a unit that has not resolved for
+    // the user yet; rejoining its cuts would pull the message out from under it.
+    layoutSource.querySelector(`.${CONTENT_WRAPPER_CLASS}`) === null
+  if (leftNoTrace) {
+    // Nothing landed. A full restore clears the generation, rejoins whatever
+    // was cut and hands the marker back, leaving the container as found.
+    restoreTranslationOnlySwapsForAnchor(layoutSource)
+    return
+  }
+
+  // Something landed, so the generation stays recorded. It is the only durable
+  // sign that this container is segmented: a unit that is a whole element
+  // registers its record on that element, and such a generation may not have
+  // cut anything at all, so neither the container's own swaps nor its split
+  // records can tell a later toggle what this is. Cleared by the full restore
+  // that ends the generation.
+}
+
+/**
+ * Translate one run of sibling nodes: protect attributes, send the run's HTML
+ * as a single request, then swap the translation into the site's own text
+ * nodes (falling back to a wrapper when the response cannot be aligned).
+ *
+ * `isCurrent` lets a caller that owns several runs invalidate the ones still
+ * in flight — the virtual-paragraph path uses it so a unit whose generation
+ * was torn down mid-request cannot write its response into restored text.
+ */
+async function translateTranslationOnlyRun(
+  nodes: ChildNode[],
+  walkId: string,
+  config: Config,
+  toggle: boolean = false,
+  forceRetranslation: boolean = false,
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   const isTransNodeAndNotTranslatedWrapper = (node: Node): node is TransNode => {
     if (isHTMLElement(node) && node.classList.contains(CONTENT_WRAPPER_CLASS)) return false
@@ -612,7 +887,7 @@ export async function translateNodeTranslationOnlyMode(
 
   let transNodes: TransNode[] = []
   let allChildNodes: ChildNode[] = []
-  if (outerTransNodes.length === 1 && isHTMLElement(outerTransNodes[0])) {
+  if (outerTransNodes.length === 1 && isHTMLElement(outerTransNodes[0]!)) {
     const unwrappedHTMLChild = unwrapDeepestOnlyHTMLChild(outerTransNodes[0], config)
     allChildNodes = [...unwrappedHTMLChild.childNodes]
     transNodes = allChildNodes.filter(isTransNodeAndNotTranslatedWrapper)
@@ -641,7 +916,7 @@ export async function translateNodeTranslationOnlyMode(
     if (!toggle) {
       const retryNodes = restored.filter((node) => node.isConnected)
       if (retryNodes.length > 0) {
-        void translateNodeTranslationOnlyMode(retryNodes, walkId, config, toggle)
+        void translateTranslationOnlyRun(retryNodes, walkId, config, toggle, forceRetranslation)
       }
     }
     return
@@ -681,9 +956,10 @@ export async function translateNodeTranslationOnlyMode(
     // wrapper is always inserted as a sibling within the run or appended into
     // a single-element run — a deep subtree query would steal a NESTED run's
     // wrapper (e.g. a li's) and leave this run's state untouched (#1846 review).
-    const existedTranslatedWrapperOutside = targetNode.parentElement.closest(
-      `.${CONTENT_WRAPPER_CLASS}`,
-    )
+    // Reuse the parent captured above: the restore-first pass may have taken
+    // targetNode out of the document, and re-reading its parentElement would
+    // throw on the null.
+    const existedTranslatedWrapperOutside = parentNode.closest(`.${CONTENT_WRAPPER_CLASS}`)
     const finalTranslatedWrapper =
       existedTranslatedWrapperOutside ?? findRunTranslationOnlyWrapper(allChildNodes, walkId)
     if (finalTranslatedWrapper && isHTMLElement(finalTranslatedWrapper)) {
@@ -702,7 +978,7 @@ export async function translateNodeTranslationOnlyMode(
         ? nodes
         : restoredNodes.filter((node) => node.isConnected)
       if (retryNodes.length > 0) {
-        void translateNodeTranslationOnlyMode(retryNodes, walkId, config, toggle)
+        void translateTranslationOnlyRun(retryNodes, walkId, config, toggle, forceRetranslation)
       }
       return
     }
@@ -711,20 +987,22 @@ export async function translateNodeTranslationOnlyMode(
       return
     }
 
-    const innerTextContent = transNodes.map((node) => extractTextContent(node, config)).join("")
-    if (!innerTextContent.trim() || isNumericContent(innerTextContent)) return
-
-    if (await shouldFilterSmallParagraph(innerTextContent, config)) return
-
+    const source = preparePageTranslationSource(transNodes, config)
     // Explicit node translation (toggle=true) overrides target-language
     // detection so users can translate foreign snippets on an otherwise
     // target-language page.
-    if (!toggle && (await shouldSkipAsTargetLanguage(innerTextContent, config))) return
+    if (!source || (await shouldSkipPageTranslationText(source.filterText, config, toggle))) return
 
     const ownerDoc = getOwnerDocument(targetNode)
-    const protectedHtml = protectTranslationHtmlAttributes(transNodes, ownerDoc)
-    const textContent = protectedHtml.sourceHtml
-    if (!textContent) return
+    // The translation is swapped into the run's own text nodes, so their
+    // parent's white-space decides whether single newlines render — a
+    // text/plain page's <pre>, a GameFAQs guide, an X tweet. Without the flag
+    // Google returns an ASCII banner and the paragraph under it as one line.
+    const request = createPageTranslationRequest(source, config, "html", {
+      preserveLineBreaks: isNewlinePreservingElement(parentNode),
+      forceRetranslation,
+    })
+    if (!request.sourceText) return
 
     // Taken before the provider request; the response handler compares against
     // it to detect host mutations that happened while the request was in
@@ -752,73 +1030,16 @@ export async function translateNodeTranslationOnlyMode(
     }
     batchDOMOperation(insertOperation)
 
-    // The source string mixes text nodes with element outerHTML and the result
-    // is re-rendered via innerHTML, so providers must treat it as HTML to keep
-    // its tags intact.
-    const deepLXProviderKey = getDeepLXHtmlAttributeProviderKey(config)
-    const translateLegacyHtml = async () => {
-      const translatedHtml = await translateTextForPage(protectedHtml.legacyRequestHtml, "html")
-      return translatedHtml ? protectedHtml.restoreLegacy(translatedHtml) : translatedHtml
-    }
-    const translateRequest = async () => {
-      if (!protectedHtml.hasPlaceholders) return translateLegacyHtml()
-
-      let ownedDeepLXProbe: DeepLXHtmlAttributeProbe | undefined
-      if (deepLXProviderKey) {
-        const probeDecision = await acquireDeepLXHtmlAttributeProbe(deepLXProviderKey)
-        if (probeDecision.useLegacy) return translateLegacyHtml()
-        ownedDeepLXProbe = probeDecision.probe
-      }
-
-      try {
-        const translatedHtml = await translateTextForPage(protectedHtml.requestHtml, "html")
-        if (!translatedHtml) {
-          if (deepLXProviderKey) {
-            finishDeepLXHtmlAttributeProbe(deepLXProviderKey, ownedDeepLXProbe, "unknown")
-          }
-          return translatedHtml
-        }
-
-        const restoredHtml = protectedHtml.restore(translatedHtml)
-        if (deepLXProviderKey) {
-          supportedDeepLXHtmlAttributeProviders.add(deepLXProviderKey)
-          finishDeepLXHtmlAttributeProbe(deepLXProviderKey, ownedDeepLXProbe, "supported")
-        }
-        return restoredHtml
-      } catch (error) {
-        if (!isHtmlAttributeMarkerIntegrityError(error)) {
-          if (deepLXProviderKey) {
-            finishDeepLXHtmlAttributeProbe(deepLXProviderKey, ownedDeepLXProbe, "unknown")
-          }
-          throw error
-        }
-
-        if (deepLXProviderKey) {
-          unsupportedDeepLXHtmlAttributeProviders.add(deepLXProviderKey)
-          supportedDeepLXHtmlAttributeProviders.delete(deepLXProviderKey)
-          finishDeepLXHtmlAttributeProbe(deepLXProviderKey, ownedDeepLXProbe, "unsupported")
-        }
-        logger.warn("HTML attribute placeholders were not preserved; retrying full HTML", error)
-        return translateLegacyHtml()
-      }
-    }
-
     const realTranslatedText = await getTranslatedTextAndRemoveSpinner(
       nodes,
-      textContent,
+      request.sourceText,
       spinner,
       translatedWrapperNode,
-      () => true,
-      "html",
-      translateRequest,
+      isCurrent,
+      request.textFormat,
+      request.translate,
     )
-    const translatedText = realTranslatedText
-      ? getDisplayTranslation(
-          protectedHtml.comparisonSourceHtml,
-          realTranslatedText,
-          protectedHtml.normalizeForComparison(realTranslatedText),
-        )
-      : realTranslatedText
+    const translatedText = request.getDisplayText(realTranslatedText)
 
     if (!translatedText) {
       // Keep the wrapper when translation failed so the injected error UI remains visible.
@@ -839,7 +1060,9 @@ export async function translateNodeTranslationOnlyMode(
       batchDOMOperation(() => {
         // Wrapper gone: a global cleanup ran while the provider call was in
         // flight, or the host re-rendered the region — leave originals alone.
-        if (!translatedWrapperNode.isConnected) return
+        // A superseded run (its generation torn down) is stale for the same
+        // reason even when its wrapper survived the round trip.
+        if (!translatedWrapperNode.isConnected || !isCurrent()) return
         markExtensionDrivenNodeRemoval(translatedWrapperNode)
         translatedWrapperNode.remove()
         // Host mutated the run mid-flight: the translation is stale, drop it.
@@ -867,7 +1090,7 @@ export async function translateNodeTranslationOnlyMode(
       // Wrapper gone from the document: a global cleanup ran while the provider
       // call was in flight, or the host re-rendered the region. The originals
       // are the live content — don't remove them to apply a stale translation.
-      if (!translatedWrapperNode.isConnected) return
+      if (!translatedWrapperNode.isConnected || !isCurrent()) return
 
       // Insert translated content after the last node
       const lastChildNode = allChildNodes.at(-1)!

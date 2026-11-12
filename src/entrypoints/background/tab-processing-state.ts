@@ -144,6 +144,32 @@ export async function clearTabProcessingState(tabId: number): Promise<void> {
   })
 }
 
+interface ProcessingTab {
+  id?: number
+  url?: string
+}
+
+/** Marks the tab as processing while `work` runs, then as done or failed. */
+export async function withTabProcessing<T>(
+  tab: ProcessingTab | undefined,
+  feature: "page" | "subtitles",
+  work: () => Promise<T>,
+): Promise<T> {
+  if (typeof tab?.id !== "number") {
+    return await work()
+  }
+
+  const token = await beginTabProcessing(tab.id, feature, tab.url)
+  try {
+    const result = await work()
+    await finishTabProcessing(token, true)
+    return result
+  } catch (error) {
+    await finishTabProcessing(token, false)
+    throw error
+  }
+}
+
 export function resetTabProcessingRuntimeForTests(): void {
   runtimeStates.clear()
   transitionQueues.clear()

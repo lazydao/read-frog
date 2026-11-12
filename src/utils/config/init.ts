@@ -13,11 +13,20 @@ import {
 import { logger } from "../logger"
 import { runMigration } from "./migration"
 
+export interface InitializeConfigResult {
+  /**
+   * The config was created from defaults in this run — either no stored value existed, or the
+   * stored value failed validation and was rebuilt. Callers use it to run one-time setup that
+   * only makes sense on untouched defaults (see `selectFreshTranslateProviders`).
+   */
+  isFreshInstall: boolean
+}
+
 /**
  * Initialize the config, this function should only be called once in the background script
  * @returns The extension config
  */
-export async function initializeConfig() {
+export async function initializeConfig(): Promise<InitializeConfigResult> {
   const [storedConfig, configMeta] = await Promise.all([
     storage.getItem<Config>(`local:${CONFIG_STORAGE_KEY}`),
     storage.getMeta<ConfigMeta>(`local:${CONFIG_STORAGE_KEY}`),
@@ -26,14 +35,15 @@ export async function initializeConfig() {
   let config: Config
   let currentVersion: number
   let didConfigChange = false
+  let isFreshInstall = false
 
   if (!storedConfig) {
-    // Fresh install: resolve the default custom-action strings in the browser locale
-    // ("auto") before they are persisted and frozen.
+    // Initialize locale before building defaults used by this browser context.
     await initI18n(DEFAULT_CONFIG.uiLanguage)
     config = buildFreshDefaultConfig()
     currentVersion = CONFIG_SCHEMA_VERSION
     didConfigChange = true
+    isFreshInstall = true
   } else {
     config = storedConfig
     currentVersion = configMeta?.schemaVersion ?? 1
@@ -51,12 +61,20 @@ export async function initializeConfig() {
     }
   }
 
-  if (!configSchema.safeParse(config).success) {
+  const parsedConfig = configSchema.safeParse(config)
+  if (parsedConfig.success) {
+    // Stored as every reader gets it: defaults filled in, the selection
+    // toolbar's order and pins in step with its actions.
+    config = parsedConfig.data
+  } else {
     logger.warn("Config is invalid, using default config")
     await initI18n(DEFAULT_CONFIG.uiLanguage)
     config = buildFreshDefaultConfig()
     currentVersion = CONFIG_SCHEMA_VERSION
     didConfigChange = true
+    // The rebuilt config is untouched defaults, so recovered users get the
+    // same one-time provider selection a genuine fresh install does.
+    isFreshInstall = true
   }
 
   if (import.meta.env.DEV) {
@@ -82,6 +100,8 @@ export async function initializeConfig() {
       lastModifiedAt: configMeta?.lastModifiedAt ?? Date.now(),
     })
   }
+
+  return { isFreshInstall }
 }
 
 function applyAPIKeysFromEnv(config: Config): { config: Config; changed: boolean } {

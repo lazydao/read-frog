@@ -1,11 +1,24 @@
 import type { ControlsConfig } from "@/entrypoints/subtitles.content/platforms"
-import type { UniversalVideoAdapter } from "@/entrypoints/subtitles.content/universal-adapter"
+import type { SubtitlesProvidersAdapter } from "@/entrypoints/subtitles.content/universal-adapter"
+import type { Config } from "@/types/config/config"
+import { QueryClientProvider } from "@tanstack/react-query"
 import { Provider as JotaiProvider } from "jotai"
 import { createContext, use, useMemo } from "react"
+import { TooltipProvider } from "@/components/ui/base-ui/tooltip"
+import { queryClient } from "@/utils/tanstack-query"
 import { subtitlesStore } from "../atoms"
 
 interface SubtitlesUIContextValue {
   toggleSubtitles: (enabled: boolean) => void
+  requestAiSubtitles: () => Promise<void>
+  supportsAiSubtitles: boolean
+  supportsSidebar: boolean
+  generateVideoSummary: (config: Config, videoId?: string | null) => Promise<string | null>
+  hasSubtitlesAvailable: () => Promise<boolean>
+  ensureSourceTrackPublished: () => Promise<void>
+  seekTo: (seconds: number) => void
+  getVideoElement: () => HTMLVideoElement | null
+  getVideoPageUrl: () => string | null
   downloadSourceSubtitles: () => Promise<void>
   downloadTranslatedSubtitles: () => Promise<void>
   controlsConfig?: ControlsConfig
@@ -24,16 +37,6 @@ export function useSubtitlesUI() {
   return ui
 }
 
-export type SubtitlesProvidersAdapter = Pick<
-  UniversalVideoAdapter,
-  | "downloadSourceSubtitles"
-  | "downloadTranslatedSubtitles"
-  | "embedded"
-  | "containerShrinkRatio"
-  | "getControlsConfig"
-  | "toggleSubtitlesManually"
->
-
 export function SubtitlesProviders({
   adapter,
   children,
@@ -46,6 +49,15 @@ export function SubtitlesProviders({
   const contextValue = useMemo(
     () => ({
       toggleSubtitles: adapter.toggleSubtitlesManually,
+      requestAiSubtitles: adapter.requestAiSubtitles,
+      supportsAiSubtitles: adapter.supportsAiSubtitles,
+      supportsSidebar: adapter.supportsSidebar,
+      generateVideoSummary: adapter.generateVideoSummary,
+      hasSubtitlesAvailable: adapter.hasSubtitlesAvailable,
+      ensureSourceTrackPublished: adapter.ensureSourceTrackPublished,
+      seekTo: adapter.seekTo,
+      getVideoElement: adapter.getVideoElement,
+      getVideoPageUrl: adapter.getVideoPageUrl,
       downloadSourceSubtitles: adapter.downloadSourceSubtitles,
       downloadTranslatedSubtitles: adapter.downloadTranslatedSubtitles,
       controlsConfig: adapter.getControlsConfig(),
@@ -58,7 +70,11 @@ export function SubtitlesProviders({
 
   return (
     <JotaiProvider store={subtitlesStore}>
-      <SubtitlesUIContext value={contextValue}>{children}</SubtitlesUIContext>
+      <QueryClientProvider client={queryClient}>
+        <SubtitlesUIContext value={contextValue}>
+          <TooltipProvider>{children}</TooltipProvider>
+        </SubtitlesUIContext>
+      </QueryClientProvider>
     </JotaiProvider>
   )
 }

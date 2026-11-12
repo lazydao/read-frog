@@ -27,17 +27,17 @@ const LONG_ENGLISH =
 function createConfig({
   mode = "bilingual",
   enableSkip = true,
-  targetCode = "cmn",
+  targetCode = "zh-Hans",
 }: {
-  mode?: Config["translate"]["mode"]
+  mode?: Config["pageTranslation"]["mode"]
   enableSkip?: boolean
   targetCode?: Config["language"]["targetCode"]
 } = {}): Config {
   const config = structuredClone(DEFAULT_CONFIG)
-  config.translate.mode = mode
-  config.translate.page.enableTargetLanguageSkip = enableSkip
-  config.translate.page.minCharactersPerNode = 0
-  config.translate.page.minWordsPerNode = 0
+  config.pageTranslation.mode = mode
+  config.pageTranslation.page.enableTargetLanguageSkip = enableSkip
+  config.pageTranslation.page.minCharactersPerNode = 0
+  config.pageTranslation.page.minWordsPerNode = 0
   config.language.targetCode = targetCode
   return config
 }
@@ -66,13 +66,13 @@ describe("shouldSkipAsTargetLanguage", () => {
   })
 
   it("returns true when the detected language matches the target", async () => {
-    mocks.detectLanguage.mockResolvedValue("cmn")
+    mocks.detectLanguage.mockResolvedValue("zh-Hans")
     await expect(shouldSkipAsTargetLanguage(LONG_CHINESE, createConfig())).resolves.toBe(true)
     expect(mocks.detectLanguage).toHaveBeenCalledWith(expect.any(String), { enableLLM: false })
   })
 
   it("returns false when the detected language differs or is unknown", async () => {
-    mocks.detectLanguage.mockResolvedValue("eng")
+    mocks.detectLanguage.mockResolvedValue("en")
     await expect(shouldSkipAsTargetLanguage(LONG_ENGLISH, createConfig())).resolves.toBe(false)
     mocks.detectLanguage.mockResolvedValue(null)
     await expect(shouldSkipAsTargetLanguage(LONG_ENGLISH, createConfig())).resolves.toBe(false)
@@ -82,7 +82,7 @@ describe("shouldSkipAsTargetLanguage", () => {
 describe.each(["bilingual", "translationOnly"] as const)("%s translation", (mode) => {
   it("never inserts a wrapper for an already-target-language paragraph", async () => {
     mocks.detectLanguage.mockImplementation(async (text: string) =>
-      /[一-鿿]/.test(text) ? "cmn" : "eng",
+      /[一-鿿]/.test(text) ? "zh-Hans" : "en",
     )
     const container = document.createElement("div")
     const textNode = document.createTextNode(LONG_CHINESE)
@@ -100,7 +100,7 @@ describe.each(["bilingual", "translationOnly"] as const)("%s translation", (mode
 
   it("still requests a translation for a different-language paragraph", async () => {
     mocks.detectLanguage.mockImplementation(async (text: string) =>
-      /[一-鿿]/.test(text) ? "cmn" : "eng",
+      /[一-鿿]/.test(text) ? "zh-Hans" : "en",
     )
     const container = document.createElement("div")
     const textNode = document.createTextNode(LONG_ENGLISH)

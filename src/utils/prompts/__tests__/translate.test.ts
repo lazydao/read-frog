@@ -1,20 +1,27 @@
 import type { Config } from "@/types/config/config"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { DEFAULT_CONFIG } from "@/utils/constants/config"
-import { isNoTranslationSentinel, NO_TRANSLATION_SENTINEL } from "@/utils/constants/prompt"
+import {
+  DEFAULT_BATCH_TRANSLATE_PROMPT,
+  DEFAULT_SENTINEL_TRANSLATE_PROMPT,
+  DEFAULT_TRANSLATE_PROMPT_ID,
+  isNoTranslationSentinel,
+  NO_TRANSLATION_SENTINEL,
+  PRECISION_REWRITE_TRANSLATE_PROMPT_ID,
+} from "@/utils/constants/prompt"
 import { HTML_ATTRIBUTE_MARKER } from "@/utils/host/translate/html-attribute-markers"
 import { getSubtitlesTranslatePrompt } from "../subtitles"
 import { getTranslatePromptFromConfig } from "../translate"
 
-vi.mock("@/utils/message", () => ({
-  sendMessage: vi.fn<(...args: any[]) => any>(),
+vi.mock("@/utils/config/storage", () => ({
+  getLocalConfig: vi.fn<(...args: any[]) => any>(),
 }))
 
 let mockGetLocalConfig: any
 
-const defaultTranslatePromptConfig: Pick<Config["translate"], "customPromptsConfig"> = {
+const defaultTranslatePromptConfig: Pick<Config["pageTranslation"], "customPromptsConfig"> = {
   customPromptsConfig: {
-    promptId: null,
+    promptId: DEFAULT_TRANSLATE_PROMPT_ID,
     patterns: [],
   },
 }
@@ -22,11 +29,11 @@ const defaultTranslatePromptConfig: Pick<Config["translate"], "customPromptsConf
 describe("translate prompt tokens", () => {
   beforeEach(async () => {
     vi.clearAllMocks()
-    mockGetLocalConfig = vi.mocked((await import("@/utils/message")).sendMessage)
+    mockGetLocalConfig = vi.mocked((await import("@/utils/config/storage")).getLocalConfig)
   })
 
   it("replaces new translate prompt tokens from config", () => {
-    const config: Pick<Config["translate"], "customPromptsConfig"> = {
+    const config: Pick<Config["pageTranslation"], "customPromptsConfig"> = {
       customPromptsConfig: {
         promptId: "custom-prompt",
         patterns: [
@@ -60,7 +67,7 @@ describe("translate prompt tokens", () => {
   })
 
   it("does not replace legacy translate prompt tokens at runtime", () => {
-    const config: Pick<Config["translate"], "customPromptsConfig"> = {
+    const config: Pick<Config["pageTranslation"], "customPromptsConfig"> = {
       customPromptsConfig: {
         promptId: "legacy-prompt",
         patterns: [
@@ -86,6 +93,87 @@ describe("translate prompt tokens", () => {
     expect(result.prompt).toBe("Translate Hola to {{targetLang}}")
   })
 
+  it("uses the product default built-in prompt", () => {
+    const result = getTranslatePromptFromConfig(defaultTranslatePromptConfig, "Japanese", "Hello", {
+      context: {
+        webTitle: "Prompt test title",
+        webSummary: "Prompt test summary",
+      },
+    })
+
+    expect(result.systemPrompt).toContain("You are a professional Japanese native translator")
+    expect(result.systemPrompt).not.toContain("{{targetLang}}")
+    expect(result.systemPrompt).not.toContain("{{title}}")
+    expect(result.systemPrompt).not.toContain("{{summary}}")
+    expect(result.prompt).toContain("Hello")
+  })
+
+  it("uses precision-rewrite when that built-in prompt is selected", () => {
+    const result = getTranslatePromptFromConfig(
+      {
+        customPromptsConfig: {
+          promptId: PRECISION_REWRITE_TRANSLATE_PROMPT_ID,
+          patterns: [],
+        },
+      },
+      "French",
+      "Hello",
+      {
+        context: {
+          webTitle: "English-only prompt test",
+          webSummary: "English-only prompt summary",
+        },
+      },
+    )
+
+    expect(result.systemPrompt).toContain("Elite Translator and Rewriting Expert")
+    expect(result.systemPrompt).toContain("Perform these steps internally without revealing them")
+    expect(result.systemPrompt).toContain("Output only the final translation")
+    expect(result.systemPrompt).not.toMatch(/\p{Script=Han}/u)
+    expect(result.prompt).not.toMatch(/\p{Script=Han}/u)
+  })
+
+  it("uses a selected custom prompt", () => {
+    const result = getTranslatePromptFromConfig(
+      {
+        customPromptsConfig: {
+          promptId: "mine",
+          patterns: [
+            {
+              id: "mine",
+              name: "Mine",
+              systemPrompt: "My custom system prompt",
+              prompt: "My custom prompt: {{input}}",
+            },
+          ],
+        },
+      },
+      "English",
+      "Hola",
+    )
+
+    expect(result).toEqual({
+      systemPrompt: "My custom system prompt",
+      prompt: "My custom prompt: Hola",
+    })
+  })
+
+  it("falls back to the product default for an unknown prompt id", () => {
+    const result = getTranslatePromptFromConfig(
+      {
+        customPromptsConfig: {
+          promptId: "missing-prompt",
+          patterns: [],
+        },
+      },
+      "Japanese",
+      "Hello",
+    )
+
+    expect(result.systemPrompt).toContain("You are a professional Japanese native translator")
+    expect(result.prompt).toContain("Hello")
+  })
+
   it("appends mandatory marker rules to the default system prompt", () => {
     const input = `<span ${HTML_ATTRIBUTE_MARKER}="0">Hello</span>`
 
@@ -100,7 +188,7 @@ describe("translate prompt tokens", () => {
   })
 
   it("appends mandatory marker rules after a custom system prompt", () => {
-    const config: Pick<Config["translate"], "customPromptsConfig"> = {
+    const config: Pick<Config["pageTranslation"], "customPromptsConfig"> = {
       customPromptsConfig: {
         promptId: "custom-prompt",
         patterns: [
@@ -152,6 +240,55 @@ describe("translate prompt tokens", () => {
     const result = getTranslatePromptFromConfig(defaultTranslatePromptConfig, "Chinese", input)
 
     expect(result.systemPrompt).not.toContain("## Protected HTML Marker Rules")
+  })
+
+  it("appends placeholder rules only when the input carries an inline atom token", () => {
+    const withToken = getTranslatePromptFromConfig(
+      defaultTranslatePromptConfig,
+      "Chinese",
+      "Let {{0}} be the mean.",
+    )
+    expect(withToken.systemPrompt).toContain("## Protected Placeholder Rules")
+    expect(withToken.systemPrompt).toContain("may move within its segment")
+    expect(withToken.systemPrompt).not.toMatch(/Rules[\s\S]*\{\{\d+\}\}/)
+
+    const without = getTranslatePromptFromConfig(
+      defaultTranslatePromptConfig,
+      "Chinese",
+      "Let x be the mean.",
+    )
+    expect(without.systemPrompt).not.toContain("## Protected Placeholder Rules")
+    // Byte-identical to the pre-feature prompt: the LLM cache hash of every
+    // paragraph without atoms must not change.
+    expect(without.systemPrompt).toBe(
+      getTranslatePromptFromConfig(defaultTranslatePromptConfig, "Chinese", "other").systemPrompt,
+    )
+  })
+
+  it.each([
+    ["the no-translation sentinel", `Prefix ${NO_TRANSLATION_SENTINEL}`],
+    ["a template literal with spaces", "Use {{ count }} in the template"],
+    ["a named prompt token", "Translate {{input}} please"],
+    ["a single-brace literal", "Format {0} here"],
+  ])("does not append placeholder rules for %s", (_case, input) => {
+    const result = getTranslatePromptFromConfig(defaultTranslatePromptConfig, "Chinese", input)
+
+    expect(result.systemPrompt).not.toContain("## Protected Placeholder Rules")
+  })
+
+  it("orders placeholder rules after marker and batch rules", () => {
+    const input = `<span ${HTML_ATTRIBUTE_MARKER}="0">First {{0}}</span>\n\n%%\n\nSecond {{0}}`
+
+    const result = getTranslatePromptFromConfig(defaultTranslatePromptConfig, "French", input, {
+      isBatch: true,
+    })
+
+    const batchRulesIndex = result.systemPrompt.indexOf("## Multi-paragraph Translation Rules")
+    const markerRulesIndex = result.systemPrompt.indexOf("## Protected HTML Marker Rules")
+    const placeholderRulesIndex = result.systemPrompt.indexOf("## Protected Placeholder Rules")
+    expect(batchRulesIndex).toBeGreaterThan(-1)
+    expect(markerRulesIndex).toBeGreaterThan(batchRulesIndex)
+    expect(placeholderRulesIndex).toBeGreaterThan(markerRulesIndex)
   })
 
   it("replaces new subtitle prompt tokens from stored config", async () => {
@@ -209,42 +346,62 @@ describe("translate prompt tokens", () => {
 })
 
 describe("no-translation sentinel", () => {
-  const defaultPromptsConfig: Pick<Config["translate"], "customPromptsConfig"> = {
-    customPromptsConfig: { promptId: null, patterns: [] },
+  const defaultPromptsConfig: Pick<Config["pageTranslation"], "customPromptsConfig"> = {
+    customPromptsConfig: { promptId: DEFAULT_TRANSLATE_PROMPT_ID, patterns: [] },
   }
 
-  it("appends the sentinel rule to batch prompts with the target language substituted", () => {
+  it.each(["Simplified Chinese", "English", "Japanese"])(
+    "appends the sentinel rule to batch prompts with %s substituted",
+    (targetLanguage) => {
+      const result = getTranslatePromptFromConfig(defaultPromptsConfig, targetLanguage, "Hi", {
+        isBatch: true,
+      })
+
+      expect(result.systemPrompt).toContain("Already-translated Input Rule")
+      expect(result.systemPrompt).toContain(NO_TRANSLATION_SENTINEL)
+      expect(result.systemPrompt).toContain(`differ from ${targetLanguage}`)
+      expect(result.systemPrompt).not.toContain("{{targetLanguage}}")
+    },
+  )
+
+  it("keeps the marker out of the batch format example", () => {
     const result = getTranslatePromptFromConfig(defaultPromptsConfig, "Simplified Chinese", "Hi", {
       isBatch: true,
     })
 
-    expect(result.systemPrompt).toContain("Already-translated Input Rule")
-    expect(result.systemPrompt).toContain(NO_TRANSLATION_SENTINEL)
-    expect(result.systemPrompt).toContain("already entirely written in Simplified Chinese")
-    expect(result.systemPrompt).not.toContain("{{targetLanguage}}")
+    // A marked slot in the worked example taught models a ~1-in-3 marker base
+    // rate that dominated the rule and silently dropped paragraphs. Every
+    // example segment must show a real translation.
+    expect(result.systemPrompt).toContain("Translation B")
+    expect(result.systemPrompt).not.toContain(`${NO_TRANSLATION_SENTINEL}\n\n%%`)
+    expect(result.systemPrompt).not.toContain("this one is already written in")
+    // The page batch block is byte-identical to the one subtitles use.
+    expect(result.systemPrompt).toContain(DEFAULT_BATCH_TRANSLATE_PROMPT)
   })
 
-  it("demonstrates the sentinel inside the batch format example (both anchors replaced)", () => {
-    const result = getTranslatePromptFromConfig(defaultPromptsConfig, "Simplified Chinese", "Hi", {
-      isBatch: true,
-    })
-
-    // Input example: Paragraph B is annotated as already in the target language.
-    expect(result.systemPrompt).toContain(
-      "Paragraph B (this one is already written in Simplified Chinese)",
+  it("keeps the selected marker rule small and pins its safety boundary", () => {
+    const lines = DEFAULT_SENTINEL_TRANSLATE_PROMPT.split("\n")
+    expect(lines).toHaveLength(2)
+    expect(lines[1]!.length).toBeLessThan(240)
+    expect(DEFAULT_SENTINEL_TRANSLATE_PROMPT).toContain(
+      "names, brands, handles, URLs, numbers, or code",
     )
-    // Output example: Paragraph B's slot is the sentinel, not "Translation B".
-    expect(result.systemPrompt).toContain(`${NO_TRANSLATION_SENTINEL}\n\n%%`)
-    expect(result.systemPrompt).not.toContain("Translation B")
+    expect(DEFAULT_SENTINEL_TRANSLATE_PROMPT).toContain(
+      "A foreign-language phrase or clause must be translated",
+    )
   })
 
   it("never leaks the sentinel into subtitle prompts, which share the batch rules", async () => {
     mockGetLocalConfig.mockResolvedValue(DEFAULT_CONFIG)
 
     const result = await getSubtitlesTranslatePrompt("Japanese", "Hello world", {
+      isBatch: true,
       context: { webTitle: "Video", webDescription: "Desc", videoSummary: "Sum" },
     })
 
+    // isBatch is what appends the shared batch block — assert it actually
+    // arrived, or the marker check below passes vacuously.
+    expect(result.systemPrompt).toContain(DEFAULT_BATCH_TRANSLATE_PROMPT)
     // The subtitle pipeline has no sentinel mapping; the marker must never
     // appear in its prompts (rule or example).
     expect(result.systemPrompt).not.toContain(NO_TRANSLATION_SENTINEL)
@@ -252,7 +409,7 @@ describe("no-translation sentinel", () => {
   })
 
   it("appends the sentinel rule after a custom system prompt in batch mode", () => {
-    const config: Pick<Config["translate"], "customPromptsConfig"> = {
+    const config: Pick<Config["pageTranslation"], "customPromptsConfig"> = {
       customPromptsConfig: {
         promptId: "custom",
         patterns: [

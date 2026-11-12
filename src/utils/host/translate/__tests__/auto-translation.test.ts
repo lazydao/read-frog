@@ -4,7 +4,7 @@ import { DEFAULT_CONFIG } from "@/utils/constants/config"
 import { shouldEnableAutoTranslation } from "../auto-translation"
 
 function createConfig(
-  pageOverrides: Partial<Config["translate"]["page"]> = {},
+  pageOverrides: Partial<Config["pageTranslation"]["page"]> = {},
   languageOverrides: Partial<Config["language"]> = {},
 ): Config {
   return {
@@ -13,10 +13,10 @@ function createConfig(
       ...DEFAULT_CONFIG.language,
       ...languageOverrides,
     },
-    translate: {
-      ...DEFAULT_CONFIG.translate,
+    pageTranslation: {
+      ...DEFAULT_CONFIG.pageTranslation,
       page: {
-        ...DEFAULT_CONFIG.translate.page,
+        ...DEFAULT_CONFIG.pageTranslation.page,
         autoTranslatePatterns: [],
         neverAutoTranslatePatterns: [],
         autoTranslateLanguages: [],
@@ -34,36 +34,38 @@ describe("shouldEnableAutoTranslation", () => {
     })
 
     await expect(
-      shouldEnableAutoTranslation("https://example.com/story", "spa", config),
+      shouldEnableAutoTranslation("https://example.com/story", "es", config),
     ).resolves.toBe(false)
   })
 
   it("returns false when a never-auto-translate pattern matches even if the detected language matches", async () => {
     const config = createConfig({
       neverAutoTranslatePatterns: ["example.com"],
-      autoTranslateLanguages: ["spa"],
+      autoTranslateLanguages: ["es"],
     })
 
     await expect(
-      shouldEnableAutoTranslation("https://example.com/story", "spa", config),
+      shouldEnableAutoTranslation("https://example.com/story", "es", config),
     ).resolves.toBe(false)
   })
 
   it("returns true when an auto-translate pattern matches and no never-auto-translate pattern matches", async () => {
+    // The stored shape a site typed on the options page produces: this host and
+    // anything under it.
     const config = createConfig({
-      autoTranslatePatterns: ["example.com"],
-      neverAutoTranslatePatterns: ["blocked.example"],
+      autoTranslatePatterns: ["*.example.com"],
+      neverAutoTranslatePatterns: ["*.blocked.example"],
     })
 
     await expect(
-      shouldEnableAutoTranslation("https://news.example.com/story", "spa", config),
+      shouldEnableAutoTranslation("https://news.example.com/story", "es", config),
     ).resolves.toBe(true)
   })
 
   it("returns true when an auto-translate language matches and no never-auto-translate pattern matches", async () => {
     const config = createConfig(
       {
-        autoTranslateLanguages: ["eng"],
+        autoTranslateLanguages: ["en"],
       },
       {
         sourceCode: "auto",
@@ -71,24 +73,24 @@ describe("shouldEnableAutoTranslation", () => {
     )
 
     await expect(
-      shouldEnableAutoTranslation("https://example.com/story", "eng", config),
+      shouldEnableAutoTranslation("https://example.com/story", "en", config),
     ).resolves.toBe(true)
   })
 
   it("returns false when no auto-translate rule matches", async () => {
     const config = createConfig({
       autoTranslatePatterns: ["example.com"],
-      autoTranslateLanguages: ["spa"],
+      autoTranslateLanguages: ["es"],
     })
 
     await expect(
-      shouldEnableAutoTranslation("https://other.example/story", "eng", config),
+      shouldEnableAutoTranslation("https://other.example/story", "en", config),
     ).resolves.toBe(false)
   })
 
   it("returns false for undetected language when no pattern matches", async () => {
     const config = createConfig({
-      autoTranslateLanguages: ["spa"],
+      autoTranslateLanguages: ["es"],
     })
 
     await expect(
